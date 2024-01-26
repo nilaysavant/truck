@@ -481,12 +481,17 @@ impl PolyBoundary {
             })
             .for_each(|(i, j)| {
                 if let Some(p) = prev {
-                    if triangulation.can_add_constraint(poly2tri[p], poly2tri[j]) {
-                        triangulation.add_constraint(poly2tri[p], poly2tri[j]);
-                        prev = None;
+                    if let (Some(from), Some(to)) = (poly2tri.get(p), poly2tri.get(j)) {
+                        if triangulation.can_add_constraint(from, to) {
+                            triangulation.add_constraint(from, to);
+                            prev = None;
+                        }
                     }
-                } else if triangulation.can_add_constraint(poly2tri[i], poly2tri[j]) {
-                    triangulation.add_constraint(poly2tri[i], poly2tri[j]);
+                }
+                if let (Some(from), Some(to)) = (poly2tri.get(i), poly2tri.get(j)) {
+                    if triangulation.can_add_constraint(from, to) {
+                        triangulation.add_constraint(from, to);
+                    }
                 } else {
                     prev = Some(i);
                 }
