@@ -5,12 +5,13 @@ use crate::filters::NormalFilters;
 use crate::Point2;
 use array_macro::array;
 use itertools::Itertools;
-use rustc_hash::FxHashMap as HashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use rayon;
+pub use rustc_hash::FxHashMap as HashMap;
 
 pub type SPoint2 = spade::Point2<f64>;
 pub type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
