@@ -18,7 +18,7 @@ pub type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
 pub type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
 pub type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
 
-pub(super) fn by_search_parameter<S>(
+pub fn by_search_parameter<S>(
     surface: &S,
     point: Point3,
     hint: Option<(f64, f64)>,
@@ -31,7 +31,7 @@ where
         .or_else(|| surface.search_parameter(point, None, 100))
 }
 
-pub(super) fn by_search_nearest_parameter<S>(
+pub fn by_search_nearest_parameter<S>(
     surface: &S,
     point: Point3,
     hint: Option<(f64, f64)>,
@@ -48,7 +48,7 @@ where
 
 /// Tessellates faces
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn shell_tessellation<'a, C, S, F>(
+pub fn shell_tessellation<'a, C, S, F>(
     shell: &Shell<Point3, C, S>,
     tol: f64,
     sp: F,
@@ -95,7 +95,7 @@ where
 
 /// Tessellates faces
 #[cfg(any(target_arch = "wasm32", test))]
-pub(super) fn shell_tessellation_single_thread<'a, C, S, F>(
+pub fn shell_tessellation_single_thread<'a, C, S, F>(
     shell: &'a Shell<Point3, C, S>,
     tol: f64,
     sp: F,
@@ -145,7 +145,7 @@ where
 }
 
 /// Tessellates faces
-pub(super) fn cshell_tessellation<'a, C, S, F>(
+pub fn cshell_tessellation<'a, C, S, F>(
     shell: &CompressedShell<Point3, C, S>,
     tol: f64,
     sp: F,
