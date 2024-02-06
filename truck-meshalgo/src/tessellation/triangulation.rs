@@ -10,10 +10,12 @@ use rustc_hash::FxHashMap as HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
-type SPoint2 = spade::Point2<f64>;
-type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
-type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
-type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
+pub use rayon;
+
+pub type SPoint2 = spade::Point2<f64>;
+pub type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
+pub type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
+pub type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
 
 pub(super) fn by_search_parameter<S>(
     surface: &S,
@@ -197,7 +199,7 @@ where
     }
 }
 
-fn shell_create_polygon<S: PreMeshableSurface>(
+pub fn shell_create_polygon<S: PreMeshableSurface>(
     surface: &S,
     wires: Vec<Wire<Point3, PolylineCurve>>,
     orientation: bool,
@@ -223,10 +225,10 @@ fn shell_create_polygon<S: PreMeshableSurface>(
 }
 
 #[derive(Debug, Default, Clone)]
-struct PolyBoundaryPiece(Vec<Point2>);
+pub struct PolyBoundaryPiece(Vec<Point2>);
 
 impl PolyBoundaryPiece {
-    fn try_new<S: PreMeshableSurface>(
+    pub fn try_new<S: PreMeshableSurface>(
         surface: &S,
         wire: impl Iterator<Item = PolylineCurve>,
         sp: impl Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)>,
@@ -290,9 +292,9 @@ impl PolyBoundaryPiece {
 }
 
 #[derive(Debug, Default, Clone)]
-struct PolyBoundary(Vec<Vec<Point2>>);
+pub struct PolyBoundary(Vec<Vec<Point2>>);
 
-fn noramlize_range(curve: &mut Vec<Point2>, compidx: usize, (u0, u1): (f64, f64)) {
+pub fn noramlize_range(curve: &mut Vec<Point2>, compidx: usize, (u0, u1): (f64, f64)) {
     let p = curve[0];
     let q = curve[curve.len() - 1];
     let tmp = f64::min(p[compidx], q[compidx]) + TOLERANCE;
@@ -316,7 +318,7 @@ fn noramlize_range(curve: &mut Vec<Point2>, compidx: usize, (u0, u1): (f64, f64)
     *curve = curve1;
 }
 
-fn loop_orientation(curve: &[Point2]) -> bool {
+pub fn loop_orientation(curve: &[Point2]) -> bool {
     curve
         .iter()
         .circular_tuple_windows()
@@ -325,7 +327,7 @@ fn loop_orientation(curve: &[Point2]) -> bool {
 }
 
 impl PolyBoundary {
-    fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: f64) -> Self {
+    pub fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: f64) -> Self {
         let (mut closed, mut open) = (Vec::new(), Vec::new());
         pieces.into_iter().for_each(|PolyBoundaryPiece(mut vec)| {
             match vec[0].distance(vec[vec.len() - 1]) < 1.0e-3 {
@@ -434,7 +436,7 @@ impl PolyBoundary {
     }
 
     /// whether `c` is included in the domain with boundary = `self`.
-    fn include(&self, c: Point2) -> bool {
+    pub fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
         self.0
@@ -462,7 +464,7 @@ impl PolyBoundary {
     }
 
     /// Inserts points and adds constraint into triangulation.
-    fn insert_to(&self, triangulation: &mut Cdt) {
+    pub fn insert_to(&self, triangulation: &mut Cdt) {
         let poly2tri: Vec<_> = self
             .0
             .iter()
@@ -500,8 +502,10 @@ impl PolyBoundary {
 }
 
 /// Tessellates one surface trimmed by polyline.
-fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64) -> PolygonMesh
-where S: PreMeshableSurface {
+pub fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: f64) -> PolygonMesh
+where
+    S: PreMeshableSurface,
+{
     let mut triangulation = Cdt::new();
     polyboundary.insert_to(&mut triangulation);
     insert_surface(&mut triangulation, surface, polyboundary, tol);
@@ -561,7 +565,7 @@ fn insert_surface(
 }
 
 /// Converts triangulation into `PolygonMesh`.
-fn triangulation_into_polymesh<'a>(
+pub fn triangulation_into_polymesh<'a>(
     vertices: VertexIterator<'a, SPoint2, (), CdtEdge<()>, ()>,
     triangles: InnerFaceIterator<'a, SPoint2, (), CdtEdge<()>, ()>,
     surface: &impl ParametricSurface3D,
@@ -606,7 +610,7 @@ fn triangulation_into_polymesh<'a>(
     )
 }
 
-fn polyline_on_surface(
+pub fn polyline_on_surface(
     surface: impl PreMeshableSurface,
     p: Point2,
     q: Point2,
