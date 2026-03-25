@@ -25,12 +25,13 @@
 //! ```
 //!
 //! Also, see the sample `newton-cuberoot.wgsl`, default shader, in `examples`.
+#![allow(deprecated)]
 
 use std::sync::Arc;
 use truck_platform::*;
 use wgpu::*;
 use winit::event::*;
-use winit::event_loop::ControlFlow;
+use winit::event_loop::*;
 
 const DEFAULT_SHADER: &str = include_str!("newton-cuberoot.wgsl");
 
@@ -168,7 +169,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                         layout: Some(layout),
                         vertex: VertexState {
                             module: &self.module,
-                            entry_point: "vs_main",
+                            entry_point: Some("vs_main"),
                             buffers: &[VertexBufferLayout {
                                 array_stride: std::mem::size_of::<u32>() as BufferAddress,
                                 step_mode: VertexStepMode::Vertex,
@@ -178,15 +179,17 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                                     shader_location: 0,
                                 }],
                             }],
+                            compilation_options: Default::default(),
                         },
                         fragment: Some(FragmentState {
                             module: &self.module,
-                            entry_point: "fs_main",
+                            entry_point: Some("fs_main"),
                             targets: &[Some(ColorTargetState {
                                 format: render_texture.format,
                                 blend: Some(BlendState::REPLACE),
                                 write_mask: ColorWrites::ALL,
                             })],
+                            compilation_options: Default::default(),
                         }),
                         primitive: PrimitiveState {
                             topology: PrimitiveTopology::TriangleList,
@@ -209,6 +212,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
                         },
                         label: None,
                         multiview: None,
+                        cache: None,
                     }),
             )
         }
@@ -258,9 +262,8 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 use plane::Plane;
 
-async fn run(event_loop: winit::event_loop::EventLoop<()>, window: winit::window::Window) {
-    let window = Arc::new(window);
-    let mut scene = WindowScene::from_window(Arc::clone(&window), &Default::default()).await;
+async fn run(event_loop: EventLoop<()>, window: winit::window::Window) {
+    let mut scene = WindowScene::from_window(Arc::new(window), &Default::default()).await;
     let args: Vec<_> = std::env::args().collect();
     let source = if args.len() > 1 {
         match std::fs::read_to_string(&args[1]) {
@@ -280,23 +283,26 @@ async fn run(event_loop: winit::event_loop::EventLoop<()>, window: winit::window
     let mut dragging = false;
     let mut clicked = false;
     let mut cursor = [0.0; 2];
-    event_loop.run(move |ev, _, control_flow| {
-        *control_flow = match ev {
-            Event::MainEventsCleared => {
-                window.request_redraw();
-                ControlFlow::Poll
-            }
-            Event::RedrawRequested(_) => {
-                scene.update_bind_group(&plane);
-                if clicked {
-                    plane.mouse[3] = -plane.mouse[3];
-                    clicked = false;
-                }
-                scene.render_frame();
+    let routine = move |ev: Event<()>, target: &ActiveEventLoop| {
+        let control_flow = match ev {
+            Event::NewEvents(StartCause::Poll) => {
+                scene.window().request_redraw();
                 ControlFlow::Poll
             }
             Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => ControlFlow::Exit,
+                WindowEvent::RedrawRequested => {
+                    scene.update_bind_group(&plane);
+                    if clicked {
+                        plane.mouse[3] = -plane.mouse[3];
+                        clicked = false;
+                    }
+                    scene.render_frame();
+                    ControlFlow::Poll
+                }
+                WindowEvent::CloseRequested => {
+                    target.exit();
+                    ControlFlow::Poll
+                }
                 WindowEvent::DroppedFile(path) => {
                     match std::fs::read_to_string(path) {
                         Ok(code) => {
@@ -333,14 +339,24 @@ async fn run(event_loop: winit::event_loop::EventLoop<()>, window: winit::window
             },
             _ => ControlFlow::Poll,
         };
-    })
+        target.set_control_flow(control_flow);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    event_loop.run(routine).unwrap();
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        event_loop.spawn(routine);
+    }
 }
 
 fn main() {
-    let event_loop = winit::event_loop::EventLoop::new();
-    let mut wb = winit::window::WindowBuilder::new();
-    wb = wb.with_title("wGSL Sandbox");
-    let window = wb.build(&event_loop).unwrap();
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let mut wa = winit::window::Window::default_attributes();
+    wa.title = "WGSL Sandbox".to_string();
+    let window = event_loop
+        .create_window(wa)
+        .expect("failed to build window");
     #[cfg(not(target_arch = "wasm32"))]
     pollster::block_on(run(event_loop, window));
     #[cfg(target_arch = "wasm32")]
@@ -353,8 +369,10 @@ fn main() {
             .and_then(|win| win.document())
             .and_then(|doc| doc.body())
             .and_then(|body| {
-                body.append_child(&web_sys::Element::from(window.canvas()))
-                    .ok()
+                let canvas = window.canvas()?;
+                canvas.set_width(500);
+                canvas.set_height(500);
+                body.append_child(&web_sys::Element::from(canvas)).ok()
             })
             .expect("couldn't append canvas to document body");
         wasm_bindgen_futures::spawn_local(run(event_loop, window));

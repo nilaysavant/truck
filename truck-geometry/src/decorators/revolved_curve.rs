@@ -9,31 +9,7 @@ impl Revolution {
         }
     }
     #[inline(always)]
-    fn point_rotation_matrix(self, v: f64) -> Matrix4 {
-        Matrix4::from_translation(self.origin.to_vec())
-            * Matrix4::from_axis_angle(self.axis, Rad(v))
-            * Matrix4::from_translation(-self.origin.to_vec())
-    }
-    #[inline(always)]
-    fn vector_rotation_matrix(self, v: f64) -> Matrix4 {
-        Matrix4::from_axis_angle(self.axis, Rad(v))
-    }
-    #[inline(always)]
-    fn derivation_rotation_matrix(self, v: f64) -> Matrix4 {
-        let n = self.axis;
-        Matrix3::new(
-            n[0] * n[0] * f64::sin(v) - f64::sin(v),
-            n[0] * n[1] * f64::sin(v) + n[2] * f64::cos(v),
-            n[0] * n[2] * f64::sin(v) - n[1] * f64::cos(v),
-            n[0] * n[1] * f64::sin(v) - n[2] * f64::cos(v),
-            n[1] * n[1] * f64::sin(v) - f64::sin(v),
-            n[1] * n[2] * f64::sin(v) + n[0] * f64::cos(v),
-            n[0] * n[2] * f64::sin(v) + n[1] * f64::cos(v),
-            n[1] * n[2] * f64::sin(v) - n[0] * f64::cos(v),
-            n[2] * n[2] * f64::sin(v) - f64::sin(v),
-        )
-        .into()
-    }
+    fn rotation_matrix(self, v: f64) -> Matrix3 { Matrix3::from_axis_angle(self.axis, Rad(v)) }
     #[inline(always)]
     fn invert(&mut self) { self.axis *= -1.0; }
     #[inline(always)]
@@ -86,39 +62,49 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutedCurve<C> {
     type Point = Point3;
     type Vector = Vector3;
     #[inline(always)]
+    fn der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
+        let center = match (m, n) {
+            (0, 0) => self.origin().to_vec(),
+            _ => Vector3::zero(),
+        };
+        let u_part = match m {
+            0 => self.curve.subs(u) - self.origin(),
+            _ => self.curve.der_n(m, u),
+        };
+        let v_part = from_axis_angle_derivation(n, self.axis(), Rad(v));
+        v_part * u_part + center
+    }
+    #[inline(always)]
     fn subs(&self, u: f64, v: f64) -> Point3 {
-        let mat = self.revolution.point_rotation_matrix(v);
-        mat.transform_point(self.curve.subs(u))
+        let mat = self.revolution.rotation_matrix(v);
+        let (p, o) = (self.curve.subs(u), self.origin());
+        o + mat * (p - o)
     }
     #[inline(always)]
     fn uder(&self, u: f64, v: f64) -> Vector3 {
-        let mat = self.revolution.vector_rotation_matrix(v);
-        mat.transform_vector(self.curve.der(u))
+        self.revolution.rotation_matrix(v) * self.curve.der(u)
     }
     #[inline(always)]
     fn vder(&self, u: f64, v: f64) -> Vector3 {
-        let pt = self.curve.subs(u);
-        let radius = self.axis().cross(pt - self.origin());
-        let mat = self.revolution.vector_rotation_matrix(v);
-        mat.transform_vector(radius)
+        let u_part = self.curve.subs(u) - self.origin();
+        let v_part = from_axis_angle_derivation(1, self.axis(), Rad(v));
+        v_part * u_part
     }
     #[inline(always)]
     fn uuder(&self, u: f64, v: f64) -> Vector3 {
-        let mat = self.revolution.vector_rotation_matrix(v);
-        mat.transform_vector(self.curve.der2(u))
+        self.revolution.rotation_matrix(v) * self.curve.der2(u)
     }
     #[inline(always)]
     fn vvder(&self, u: f64, v: f64) -> Vector3 {
-        let pt = self.curve.subs(u);
-        let z = self.revolution.proj_point(pt).x;
-        let radius = pt - self.origin() - z * self.axis();
-        let mat = self.revolution.vector_rotation_matrix(v);
-        -mat.transform_vector(radius)
+        let u_part = self.curve.subs(u) - self.origin();
+        let v_part = from_axis_angle_derivation(2, self.axis(), Rad(v));
+        v_part * u_part
     }
     #[inline(always)]
     fn uvder(&self, u: f64, v: f64) -> Vector3 {
-        let mat = self.revolution.derivation_rotation_matrix(v);
-        mat.transform_vector(self.curve.der(u))
+        let u_part = self.curve.der(u);
+        let v_part = from_axis_angle_derivation(1, self.axis(), Rad(v));
+        v_part * u_part
     }
     #[inline(always)]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
@@ -185,6 +171,15 @@ struct ProjectedCurve<C> {
 impl<C: ParametricCurve3D> ParametricCurve for ProjectedCurve<C> {
     type Point = Point2;
     type Vector = Vector2;
+    #[inline(always)]
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector {
+        match n {
+            0 => self.subs(t).to_vec(),
+            1 => self.der(t),
+            2 => self.der2(t),
+            _ => unimplemented!(),
+        }
+    }
     #[inline(always)]
     fn subs(&self, t: f64) -> Self::Point { self.revolution.proj_point(self.curve.subs(t)) }
     #[inline(always)]
@@ -422,7 +417,7 @@ where
         })
 }
 
-impl<'a> IncludeCurve<BSplineCurve<Point3>> for RevolutedCurve<&'a BSplineCurve<Point3>> {
+impl IncludeCurve<BSplineCurve<Point3>> for RevolutedCurve<&BSplineCurve<Point3>> {
     fn include(&self, curve: &BSplineCurve<Point3>) -> bool {
         let knots = curve.knot_vec().to_single_multi().0;
         let degree = usize::max(2, usize::max(curve.degree(), self.curve.degree()));
@@ -438,7 +433,7 @@ impl IncludeCurve<BSplineCurve<Point3>> for RevolutedCurve<BSplineCurve<Point3>>
     }
 }
 
-impl<'a> IncludeCurve<BSplineCurve<Point3>> for RevolutedCurve<&'a NurbsCurve<Vector4>> {
+impl IncludeCurve<BSplineCurve<Point3>> for RevolutedCurve<&NurbsCurve<Vector4>> {
     fn include(&self, curve: &BSplineCurve<Point3>) -> bool {
         let knots = curve.knot_vec().to_single_multi().0;
         let degree = curve.degree() + usize::max(2, self.curve.degree());
@@ -454,7 +449,7 @@ impl IncludeCurve<BSplineCurve<Point3>> for RevolutedCurve<NurbsCurve<Vector4>> 
     }
 }
 
-impl<'a> IncludeCurve<NurbsCurve<Vector4>> for RevolutedCurve<&'a BSplineCurve<Point3>> {
+impl IncludeCurve<NurbsCurve<Vector4>> for RevolutedCurve<&BSplineCurve<Point3>> {
     fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
         let knots = curve.knot_vec().to_single_multi().0;
         let degree = curve.degree() + usize::max(2, self.curve.degree());
@@ -470,7 +465,7 @@ impl IncludeCurve<NurbsCurve<Vector4>> for RevolutedCurve<BSplineCurve<Point3>> 
     }
 }
 
-impl<'a> IncludeCurve<NurbsCurve<Vector4>> for RevolutedCurve<&'a NurbsCurve<Vector4>> {
+impl IncludeCurve<NurbsCurve<Vector4>> for RevolutedCurve<&NurbsCurve<Vector4>> {
     fn include(&self, curve: &NurbsCurve<Vector4>) -> bool {
         let knots = curve.knot_vec().to_single_multi().0;
         let degree = curve.degree() + usize::max(2, self.curve.degree());
@@ -512,178 +507,32 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
     }
 }
 
-#[test]
-fn revolve_test() {
-    let pt0 = Point3::new(0.0, 2.0, 1.0);
-    let pt1 = Point3::new(1.0, 0.0, 0.0);
-    let curve = BSplineCurve::new(KnotVec::bezier_knot(1), vec![pt0, pt1]);
-    let surface = RevolutedCurve::by_revolution(curve, Point3::origin(), Vector3::unit_y());
-    const N: usize = 100;
-    for i in 0..=N {
-        for j in 0..=N {
-            let u = i as f64 / N as f64;
-            let v = 2.0 * PI * j as f64 / N as f64;
-            let res = surface.subs(u, v);
-            let ans = Point3::new(
-                u * f64::cos(v) + (1.0 - u) * f64::sin(v),
-                2.0 * (1.0 - u),
-                -u * f64::sin(v) + (1.0 - u) * f64::cos(v),
-            );
-            assert_near!(res, ans);
-            let res_uder = surface.uder(u, v);
-            let ans_uder =
-                Vector3::new(f64::cos(v) - f64::sin(v), -2.0, -f64::sin(v) - f64::cos(v));
-            assert_near!(res_uder, ans_uder);
-            let res_vder = surface.vder(u, v);
-            let ans_vder = Vector3::new(
-                -u * f64::sin(v) + (1.0 - u) * f64::cos(v),
-                0.0,
-                -u * f64::cos(v) - (1.0 - u) * f64::sin(v),
-            );
-            assert_near!(res_vder, ans_vder);
-            let res_uuder = surface.uuder(u, v);
-            let ans_uuder = Vector3::zero();
-            assert_near!(res_uuder, ans_uuder);
-            let res_uvder = surface.uvder(u, v);
-            let ans_uvder =
-                Vector3::new(-f64::sin(v) - f64::cos(v), 0.0, -f64::cos(v) + f64::sin(v));
-            assert_near!(res_uvder, ans_uvder);
-            let res_vvder = surface.vvder(u, v);
-            let ans_vvder = Vector3::new(
-                -u * f64::cos(v) - (1.0 - u) * f64::sin(v),
-                0.0,
-                u * f64::sin(v) - (1.0 - u) * f64::cos(v),
-            );
-            assert_near!(res_vvder, ans_vvder);
-            let normal = surface.normal(u, v);
-            assert!(normal.dot(res_uder).so_small());
-            assert!(normal.dot(res_vder).so_small());
-        }
-    }
-}
+fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matrix3 {
+    let (s, c) = Rad::sin_cos(angle);
+    let (s, c) = match n % 4 {
+        0 => (s, c),
+        1 => (c, -s),
+        2 => (-s, -c),
+        _ => (-c, s),
+    };
+    let _1subc = match n {
+        0 => 1.0 - c,
+        _ => -c,
+    };
 
-#[test]
-fn search_parameter() {
-    let line = BSplineCurve::new(
-        KnotVec::bezier_knot(1),
-        vec![Point3::new(0.0, 2.0, 1.0), Point3::new(1.0, 0.0, 0.0)],
-    );
-    let surface = RevolutedCurve::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let pt = Point3::new(-0.5, 1.0, 0.5);
-    let (u, v) = surface.search_parameter(pt, Some((0.4, 1.2)), 100).unwrap();
-    assert_near!(surface.subs(u, v), pt);
-}
+    #[allow(clippy::deprecated_cfg_attr)]
+    #[cfg_attr(rustfmt, rustfmt_skip)]
+    Matrix3::new(
+        _1subc * axis.x * axis.x + c,
+        _1subc * axis.x * axis.y + s * axis.z,
+        _1subc * axis.x * axis.z - s * axis.y,
 
-#[test]
-fn search_parameter_with_fixed_points() {
-    let line = BSplineCurve::new(
-        KnotVec::bezier_knot(2),
-        vec![
-            Point3::new(0.0, 1.0, 0.0),
-            Point3::new(0.0, 0.0, 1.0),
-            Point3::new(0.0, -1.0, 0.0),
-        ],
-    );
-    let surface = RevolutedCurve::by_revolution(line, Point3::origin(), Vector3::unit_y());
+        _1subc * axis.x * axis.y - s * axis.z,
+        _1subc * axis.y * axis.y + c,
+        _1subc * axis.y * axis.z + s * axis.x,
 
-    let (u, v) = surface
-        .search_parameter(Point3::new(0.0, 1.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
-    assert_near!(Vector2::new(u, v), Vector2::new(0.0, 0.3));
-
-    let (u, v) = surface
-        .search_parameter(Point3::new(0.0, -1.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
-    assert_near!(Vector2::new(u, v), Vector2::new(1.0, 0.3));
-}
-
-#[test]
-fn search_nearest_parameter() {
-    let line = BSplineCurve::new(
-        KnotVec::bezier_knot(1),
-        vec![Point3::new(0.0, 2.0, 1.0), Point3::new(1.0, 0.0, 0.0)],
-    );
-    let surface = RevolutedCurve::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let pt = surface.subs(0.4, 1.2) + 0.1 * surface.normal(0.4, 1.2);
-    let (u, v) = surface
-        .search_nearest_parameter(pt, Some((0.4, 1.2)), 100)
-        .unwrap();
-    assert_near!(Vector2::new(u, v), Vector2::new(0.4, 1.2));
-}
-
-#[test]
-fn search_nearest_parameter_with_fixed_points() {
-    let line = BSplineCurve::new(
-        KnotVec::bezier_knot(2),
-        vec![
-            Point3::new(0.0, 1.0, 0.0),
-            Point3::new(0.0, 0.0, 1.0),
-            Point3::new(0.0, -1.0, 0.0),
-        ],
-    );
-    let surface = RevolutedCurve::by_revolution(line, Point3::origin(), Vector3::unit_y());
-
-    let (u, v) = surface
-        .search_nearest_parameter(Point3::new(0.0, 2.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
-    assert_near!(Vector2::new(u, v), Vector2::new(0.0, 0.3));
-
-    let (u, v) = surface
-        .search_nearest_parameter(Point3::new(0.0, -2.0, 0.0), Some((0.5, 0.3)), 10)
-        .unwrap();
-    assert_near!(Vector2::new(u, v), Vector2::new(1.0, 0.3));
-}
-
-#[test]
-fn include_curve_normal() {
-    let line = BSplineCurve::new(
-        KnotVec::bezier_knot(1),
-        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
-    );
-    let surface = RevolutedCurve::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let parabola = BSplineCurve::new(
-        KnotVec::bezier_knot(2),
-        vec![
-            Point3::new(1.0, 1.0, 0.0),
-            Point3::new(0.0, 0.0, 1.0),
-            Point3::new(-1.0, 1.0, 0.0),
-        ],
-    );
-    assert!(surface.include(&parabola));
-}
-
-#[test]
-fn include_curve_abnormal0() {
-    let line = BSplineCurve::new(
-        KnotVec::bezier_knot(1),
-        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
-    );
-    let surface = RevolutedCurve::by_revolution(line, Point3::origin(), Vector3::unit_y());
-    let parabola = BSplineCurve::new(
-        KnotVec::bezier_knot(2),
-        vec![
-            Point3::new(1.0, 1.0, 0.0),
-            Point3::new(0.0, 0.0, 2.0),
-            Point3::new(-1.0, 1.0, 0.0),
-        ],
-    );
-    assert!(!surface.include(&parabola));
-}
-
-#[test]
-fn include_curve_abnormal1() {
-    let curve = NurbsCurve::new(BSplineCurve::new(
-        KnotVec::bezier_knot(3),
-        vec![
-            Vector4::new(0.0, 3.0, 0.0, 1.0),
-            Vector4::new(0.0, 3.0, 3.0, 0.5),
-            Vector4::new(0.0, 0.0, 0.0, 1.0),
-            Vector4::new(0.0, 0.0, 3.0, 1.0),
-        ],
-    ));
-    let pt0 = curve.subs(0.2);
-    let pt1 = curve.subs(0.6);
-    let surface = RevolutedCurve::by_revolution(curve, Point3::origin(), Vector3::unit_y());
-    let line = BSplineCurve::new(KnotVec::bezier_knot(1), vec![pt0, pt1]);
-    assert!(!surface.include(&line));
+        _1subc * axis.x * axis.z + s * axis.y,
+        _1subc * axis.y * axis.z - s * axis.x,
+        _1subc * axis.z * axis.z + c,
+    )
 }

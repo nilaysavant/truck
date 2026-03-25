@@ -100,9 +100,9 @@ impl Rendered for WireFrameInstance {
             layout: Some(layout),
             vertex: VertexState {
                 module: &self.shaders.vertex_module,
-                entry_point: self.shaders.vertex_entry,
+                entry_point: Some(self.shaders.vertex_entry),
                 buffers: &[VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 3]>() as BufferAddress,
+                    array_stride: size_of::<[f32; 3]>() as BufferAddress,
                     step_mode: VertexStepMode::Vertex,
                     attributes: &[VertexAttribute {
                         format: VertexFormat::Float32x3,
@@ -110,15 +110,17 @@ impl Rendered for WireFrameInstance {
                         shader_location: 0,
                     }],
                 }],
+                compilation_options: Default::default(),
             },
             fragment: Some(FragmentState {
                 module: &self.shaders.fragment_module,
-                entry_point: self.shaders.fragment_entry,
+                entry_point: Some(self.shaders.fragment_entry),
                 targets: &[Some(ColorTargetState {
                     format: scene_desc.render_texture.format,
                     blend: Some(BlendState::REPLACE),
                     write_mask: ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::LineList,
@@ -127,7 +129,7 @@ impl Rendered for WireFrameInstance {
             depth_stencil: Some(DepthStencilState {
                 format: TextureFormat::Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_compare: CompareFunction::Less,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -138,6 +140,7 @@ impl Rendered for WireFrameInstance {
             },
             label: None,
             multiview: None,
+            cache: None,
         });
         Arc::new(pipeline)
     }

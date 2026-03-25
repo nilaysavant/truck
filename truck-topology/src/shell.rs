@@ -1,10 +1,30 @@
 use crate::*;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::vec::Vec;
 use truck_base::entry_map::FxEntryMap as EntryMap;
 
-type FaceAdjacencyMap<'a, P, C, S> = HashMap<&'a Face<P, C, S>, Vec<&'a Face<P, C, S>>>;
+/// A face adjacent to the specified face
+#[derive(Clone, Debug)]
+pub struct AdjacentFace<'a, P, C, S> {
+    /// face adjacent to the specified face
+    pub face: &'a Face<P, C, S>,
+    /// edges shared by two faces
+    pub common_edges: Vec<EdgeID<C>>,
+}
+
+trait As<T> {
+    fn as_(self) -> T;
+}
+
+impl<T> As<T> for T {
+    fn as_(self) -> T { self }
+}
+
+impl<'a, P, C, S> As<&'a Face<P, C, S>> for AdjacentFace<'a, P, C, S> {
+    fn as_(self) -> &'a Face<P, C, S> { self.face }
+}
+
+type FaceAdjacencyMap<'a, P, C, S> = HashMap<&'a Face<P, C, S>, Vec<AdjacentFace<'a, P, C, S>>>;
 impl<P, C, S> Shell<P, C, S> {
     /// Creates the empty shell.
     #[inline(always)]
@@ -129,16 +149,16 @@ impl<P, C, S> Shell<P, C, S> {
     ///     Edge::new(&v[4], &v[5], ()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[2], &edge[1].inverse()]),
-    ///     Wire::from_iter(vec![&edge[3], &edge[7], &edge[4].inverse()]),
-    ///     Wire::from_iter(vec![&edge[5], &edge[8], &edge[6].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2].inverse(), &edge[4], &edge[5].inverse()]),
+    ///     wire![&edge[0], &edge[2], &edge[1].inverse()],
+    ///     wire![&edge[3], &edge[7], &edge[4].inverse()],
+    ///     wire![&edge[5], &edge[8], &edge[6].inverse()],
+    ///     wire![&edge[2].inverse(), &edge[4], &edge[5].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// let boundary = shell.extract_boundaries()[0].clone();
     /// assert_eq!(
     ///     boundary,
-    ///     Wire::from_iter(vec![&edge[0], &edge[3], &edge[7], &edge[8], &edge[6].inverse(), &edge[1].inverse()]),
+    ///     wire![&edge[0], &edge[3], &edge[7], &edge[8], &edge[6].inverse(), &edge[1].inverse()],
     /// );
     /// ```
     /// # Remarks
@@ -157,7 +177,8 @@ impl<P, C, S> Shell<P, C, S> {
             })
             .collect();
         let mut res = Vec::new();
-        while let Some(edge) = vemap.values().next() {
+        while !vemap.is_empty() {
+            let edge = self.vertex_iter().find_map(|v| vemap.get(&v.id())).unwrap();
             if let Some(mut cursor) = vemap.remove(&edge.front().id()) {
                 let mut wire = Wire::from(vec![cursor.clone()]);
                 loop {
@@ -177,8 +198,8 @@ impl<P, C, S> Shell<P, C, S> {
 
     /// Returns the adjacency matrix of vertices in the shell.
     ///
-    /// For the returned hashmap `map` and each vertex `v`,
-    /// the vector `map[&v]` cosists all vertices which is adjacent to `v`.
+    /// For the returned hashmap `map` and each vertex `v`, the
+    /// vector `map[&v]` consists of all vertices which is adjacent to `v`.
     /// # Examples
     /// ```
     /// use truck_topology::*;
@@ -192,8 +213,8 @@ impl<P, C, S> Shell<P, C, S> {
     ///     Edge::new(&v[2], &v[3], ()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[4], &edge[1].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2], &edge[4], &edge[3].inverse()]),
+    ///     wire![&edge[0], &edge[4], &edge[1].inverse()],
+    ///     wire![&edge[2], &edge[4], &edge[3].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// let adjacency = shell.vertex_adjacency();
@@ -222,7 +243,6 @@ impl<P, C, S> Shell<P, C, S> {
     /// # Examples
     /// ```
     /// use truck_topology::*;
-    /// use truck_topology::shell::ShellCondition;
     /// let v = Vertex::news(&[(); 6]);
     /// let edge = [
     ///     Edge::new(&v[0], &v[1], ()),
@@ -236,10 +256,10 @@ impl<P, C, S> Shell<P, C, S> {
     ///     Edge::new(&v[4], &v[5], ()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[2], &edge[1].inverse()]),
-    ///     Wire::from_iter(vec![&edge[3], &edge[7], &edge[4].inverse()]),
-    ///     Wire::from_iter(vec![&edge[5], &edge[8], &edge[6].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2].inverse(), &edge[4], &edge[5].inverse()]),
+    ///     wire![&edge[0], &edge[2], &edge[1].inverse()],
+    ///     wire![&edge[3], &edge[7], &edge[4].inverse()],
+    ///     wire![&edge[5], &edge[8], &edge[6].inverse()],
+    ///     wire![&edge[2].inverse(), &edge[4], &edge[5].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// let face_adjacency = shell.face_adjacency();
@@ -248,22 +268,88 @@ impl<P, C, S> Shell<P, C, S> {
     /// assert_eq!(face_adjacency[&shell[2]].len(), 1);
     /// assert_eq!(face_adjacency[&shell[3]].len(), 3);
     /// ```
+    /// ```
+    /// use truck_topology::*;
+    /// use shell::AdjacentFace;
+    /// let v = Vertex::news(&[(); 8]);
+    /// let edge = [
+    ///     Edge::new(&v[0], &v[1], ()),
+    ///     Edge::new(&v[1], &v[2], ()),
+    ///     Edge::new(&v[0], &v[3], ()),
+    ///     Edge::new(&v[1], &v[6], ()),
+    ///     Edge::new(&v[6], &v[7], ()),
+    ///     Edge::new(&v[6], &v[7], ()),
+    ///     Edge::new(&v[7], &v[4], ()),
+    ///     Edge::new(&v[2], &v[5], ()),
+    ///     Edge::new(&v[3], &v[4], ()),
+    ///     Edge::new(&v[4], &v[5], ()),
+    /// ];
+    /// let wire = vec![
+    ///     wire![
+    ///         &edge[2],
+    ///         &edge[8],
+    ///         &edge[6].inverse(),
+    ///         &edge[4].inverse(),
+    ///         &edge[3].inverse(),
+    ///         &edge[0].inverse()
+    ///     ],
+    ///     wire![
+    ///         &edge[3],
+    ///         &edge[5],
+    ///         &edge[6],
+    ///         &edge[9],
+    ///         &edge[7].inverse(),
+    ///         &edge[1].inverse(),
+    ///     ],
+    ///     wire![&edge[4], &edge[5].inverse()],
+    /// ];
+    /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
+    /// let face_adjacency = shell.face_adjacency();
+    /// let determine = |face0: &Face<_, _, _>, face1: &Face<_, _, _>, common_edges: usize| {
+    ///     if (face0, face1) == (&shell[0], &shell[1]) || (face0, face1) == (&shell[1], &shell[0]) {
+    ///         assert_eq!(common_edges, 2);
+    ///     } else {
+    ///         assert_eq!(common_edges, 1);
+    ///     }
+    /// };
+    /// face_adjacency.into_iter().for_each(|(face0, adjacents)| {
+    ///     adjacents.into_iter().for_each(|AdjacentFace { face, common_edges }| {
+    ///         determine(face, face0, common_edges.len());
+    ///     })
+    /// })
+    /// ```
     pub fn face_adjacency(&self) -> FaceAdjacencyMap<'_, P, C, S> {
-        let mut adjacency = EntryMap::new(|x| x, |_| Vec::new());
-        let mut edge_face_map = EntryMap::new(|x| x, |_| Vec::new());
+        let mut edge_face_map = EntryMap::new(|edge: &Edge<P, C>| edge.id(), |_| Vec::new());
         self.face_iter().for_each(|face| {
-            face.absolute_boundaries()
-                .iter()
-                .flatten()
-                .for_each(|edge| {
-                    let vec = edge_face_map.entry_or_insert(edge.id());
-                    adjacency.entry_or_insert(face).extend(vec.iter().copied());
-                    vec.iter().for_each(|tmp| {
-                        adjacency.entry_or_insert(*tmp).push(face);
-                    });
-                    vec.push(face);
-                });
+            let insert = |edge| edge_face_map.entry_or_insert(edge).push(face);
+            face.absolute_boundaries().iter().flatten().for_each(insert)
         });
+        let mut adjacency = EntryMap::new(|x| x, |_| Vec::new());
+        edge_face_map.into_iter().for_each(|(edge_id, vec)| {
+            vec.iter().for_each(|face| {
+                let adjacents = adjacency.entry_or_insert(*face);
+                vec.iter().for_each(|face0| {
+                    if face == face0 {
+                        return;
+                    }
+                    let add_edge = |adjacent: &mut AdjacentFace<'_, P, C, S>| {
+                        let res = &adjacent.face == face0;
+                        if res {
+                            adjacent.common_edges.push(edge_id);
+                        }
+                        res
+                    };
+                    let exists = adjacents.iter_mut().any(add_edge);
+                    if !exists {
+                        adjacents.push(AdjacentFace {
+                            face: face0,
+                            common_edges: vec![edge_id],
+                        });
+                    }
+                });
+            });
+        });
+
         adjacency.into()
     }
 
@@ -279,17 +365,17 @@ impl<P, C, S> Shell<P, C, S> {
     /// use truck_topology::*;
     /// let v = Vertex::news(&[(); 4]);
     /// let shared_edge = Edge::new(&v[1], &v[2], ());
-    /// let wire0 = Wire::from_iter(vec![
+    /// let wire0 = wire![
     ///     &Edge::new(&v[0], &v[1], ()),
     ///     &shared_edge,
     ///     &Edge::new(&v[2], &v[0], ()),
-    /// ]);
+    /// ];
     /// let face0 = Face::new(vec![wire0], ());
-    /// let wire1 = Wire::from_iter(vec![
+    /// let wire1 = wire![
     ///     &Edge::new(&v[3], &v[1], ()),
     ///     &shared_edge,
     ///     &Edge::new(&v[2], &v[3], ()),
-    /// ]);
+    /// ];
     /// let face1 = Face::new(vec![wire1], ());
     /// let shell: Shell<_, _, _> = vec![face0, face1].into();
     /// assert!(shell.is_connected());
@@ -298,17 +384,17 @@ impl<P, C, S> Shell<P, C, S> {
     /// // An example of a non-connected shell
     /// use truck_topology::*;
     /// let v = Vertex::news(&[(); 6]);
-    /// let wire0 = Wire::from_iter(vec![
+    /// let wire0 = wire![
     ///     Edge::new(&v[0], &v[1], ()),
     ///     Edge::new(&v[1], &v[2], ()),
     ///     Edge::new(&v[2], &v[0], ())
-    /// ]);
+    /// ];
     /// let face0 = Face::new(vec![wire0], ());
-    /// let wire1 = Wire::from_iter(vec![
-    ///     &Edge::new(&v[3], &v[4], ()),
-    ///     &Edge::new(&v[4], &v[5], ()),
-    ///     &Edge::new(&v[5], &v[3], ())
-    /// ]);
+    /// let wire1 = wire![
+    ///     Edge::new(&v[3], &v[4], ()),
+    ///     Edge::new(&v[4], &v[5], ()),
+    ///     Edge::new(&v[5], &v[3], ())
+    /// ];
     /// let face1 = Face::new(vec![wire1], ());
     /// let shell: Shell<_, _, _> = vec![face0, face1].into();
     /// assert!(!shell.is_connected());
@@ -341,16 +427,16 @@ impl<P, C, S> Shell<P, C, S> {
     /// ```
     /// use truck_topology::*;
     /// let v = Vertex::news(&[(); 5]);
-    /// let wire0 = Wire::from_iter(vec![
+    /// let wire0 = wire![
     ///     Edge::new(&v[0], &v[1], ()),
     ///     Edge::new(&v[1], &v[2], ()),
     ///     Edge::new(&v[2], &v[0], ()),
-    /// ]);
-    /// let wire1 = Wire::from_iter(vec![
+    /// ];
+    /// let wire1 = wire![
     ///     Edge::new(&v[0], &v[3], ()),
     ///     Edge::new(&v[3], &v[4], ()),
     ///     Edge::new(&v[4], &v[0], ()),
-    /// ]);
+    /// ];
     /// let shell = Shell::from(vec![
     ///     Face::new(vec![wire0], ()),
     ///     Face::new(vec![wire1], ()),
@@ -390,8 +476,8 @@ impl<P, C, S> Shell<P, C, S> {
     ///     Edge::new(&v[0], &v[3], ()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[3], &edge[4], &edge[2]]),
-    ///     Wire::from_iter(vec![&edge[1], &edge[2], &edge[5], &edge[3].inverse()]),
+    ///     wire![&edge[0], &edge[3], &edge[4], &edge[2]],
+    ///     wire![&edge[1], &edge[2], &edge[5], &edge[3].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// assert_eq!(shell.shell_condition(), ShellCondition::Regular);
@@ -418,14 +504,14 @@ impl<P, C, S> Shell<P, C, S> {
     ///     Edge::new(&v[6], &v[4], ()), // 11
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0].inverse(), &edge[1], &edge[3].inverse()]),
-    ///     Wire::from_iter(vec![&edge[1].inverse(), &edge[2], &edge[4].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2].inverse(), &edge[0], &edge[5].inverse()]),
-    ///     Wire::from_iter(vec![&edge[3], &edge[4], &edge[5]]),
-    ///     Wire::from_iter(vec![&edge[6].inverse(), &edge[7], &edge[9].inverse()]),
-    ///     Wire::from_iter(vec![&edge[7].inverse(), &edge[8], &edge[10].inverse()]),
-    ///     Wire::from_iter(vec![&edge[8].inverse(), &edge[6], &edge[11].inverse()]),
-    ///     Wire::from_iter(vec![&edge[9], &edge[10], &edge[11]]),
+    ///     wire![&edge[0].inverse(), &edge[1], &edge[3].inverse()],
+    ///     wire![&edge[1].inverse(), &edge[2], &edge[4].inverse()],
+    ///     wire![&edge[2].inverse(), &edge[0], &edge[5].inverse()],
+    ///     wire![&edge[3], &edge[4], &edge[5]],
+    ///     wire![&edge[6].inverse(), &edge[7], &edge[9].inverse()],
+    ///     wire![&edge[7].inverse(), &edge[8], &edge[10].inverse()],
+    ///     wire![&edge[8].inverse(), &edge[6], &edge[11].inverse()],
+    ///     wire![&edge[9], &edge[10], &edge[11]],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// assert_eq!(shell.shell_condition(), ShellCondition::Closed);
@@ -652,7 +738,7 @@ impl<P, C, S> Shell<P, C, S> {
     /// - there are no vertex corresponding to `vertex_id` in the shell,
     /// - the vertex is included more than 2 face boundaries,
     /// - the vertex is included more than 2 edges, or
-    /// - concating edges is failed.
+    /// - concatenating edges is failed.
     pub fn remove_vertex_by_concat_edges(&mut self, vertex_id: VertexID<P>) -> Option<Edge<P, C>>
     where
         P: Debug,
@@ -708,8 +794,8 @@ impl<P, C, S> Shell<P, C, S> {
     ///     Edge::new(&v[0], &v[3], ()), // 5
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[3], &edge[4], &edge[2]]),
-    ///     Wire::from_iter(vec![&edge[1], &edge[2], &edge[5], &edge[3].inverse()]),
+    ///     wire![&edge[0], &edge[3], &edge[4], &edge[2]],
+    ///     wire![&edge[1], &edge[2], &edge[5], &edge[3].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     ///
@@ -747,21 +833,22 @@ impl<P, C, S> Clone for Shell<P, C, S> {
     }
 }
 
-impl<P, C, S> From<Shell<P, C, S>> for Vec<Face<P, C, S>> {
+impl<P, C, S, T> From<T> for Shell<P, C, S>
+where Vec<Face<P, C, S>>: From<T>
+{
     #[inline(always)]
-    fn from(shell: Shell<P, C, S>) -> Vec<Face<P, C, S>> { shell.face_list }
-}
-
-impl<P, C, S> From<Vec<Face<P, C, S>>> for Shell<P, C, S> {
-    #[inline(always)]
-    fn from(faces: Vec<Face<P, C, S>>) -> Shell<P, C, S> { Shell { face_list: faces } }
+    fn from(faces: T) -> Shell<P, C, S> {
+        Shell {
+            face_list: faces.into(),
+        }
+    }
 }
 
 impl<P, C, S> FromIterator<Face<P, C, S>> for Shell<P, C, S> {
     #[inline(always)]
     fn from_iter<I: IntoIterator<Item = Face<P, C, S>>>(iter: I) -> Shell<P, C, S> {
         Shell {
-            face_list: iter.into_iter().collect(),
+            face_list: Vec::from_iter(iter),
         }
     }
 }
@@ -780,6 +867,16 @@ impl<'a, P, C, S> IntoIterator for &'a Shell<P, C, S> {
     fn into_iter(self) -> Self::IntoIter { self.face_list.iter() }
 }
 
+impl<P, C, S> AsRef<Vec<Face<P, C, S>>> for Shell<P, C, S> {
+    #[inline(always)]
+    fn as_ref(&self) -> &Vec<Face<P, C, S>> { &self.face_list }
+}
+
+impl<P, C, S> AsRef<[Face<P, C, S>]> for Shell<P, C, S> {
+    #[inline(always)]
+    fn as_ref(&self) -> &[Face<P, C, S>] { &self.face_list }
+}
+
 impl<P, C, S> std::ops::Deref for Shell<P, C, S> {
     type Target = Vec<Face<P, C, S>>;
     #[inline(always)]
@@ -789,6 +886,23 @@ impl<P, C, S> std::ops::Deref for Shell<P, C, S> {
 impl<P, C, S> std::ops::DerefMut for Shell<P, C, S> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Vec<Face<P, C, S>> { &mut self.face_list }
+}
+
+impl<P, C, S> std::borrow::Borrow<Vec<Face<P, C, S>>> for Shell<P, C, S> {
+    #[inline(always)]
+    fn borrow(&self) -> &Vec<Face<P, C, S>> { &self.face_list }
+}
+
+impl<P, C, S> std::borrow::Borrow<[Face<P, C, S>]> for Shell<P, C, S> {
+    #[inline(always)]
+    fn borrow(&self) -> &[Face<P, C, S>] { &self.face_list }
+}
+
+impl<P, C, S> Extend<Face<P, C, S>> for Shell<P, C, S> {
+    #[inline(always)]
+    fn extend<T: IntoIterator<Item = Face<P, C, S>>>(&mut self, iter: T) {
+        self.face_list.extend(iter)
+    }
 }
 
 impl<P, C, S> Default for Shell<P, C, S> {
@@ -839,9 +953,9 @@ pub enum ShellCondition {
     ///    Edge::new(&v[1], &v[4], ()),
     /// ];
     /// let wire = vec![
-    ///    Wire::from_iter(vec![&edge[0], &edge[4], &edge[1].inverse()]),
-    ///    Wire::from_iter(vec![&edge[0], &edge[5], &edge[2].inverse()]),
-    ///    Wire::from_iter(vec![&edge[0], &edge[6], &edge[3].inverse()]),
+    ///    wire![&edge[0], &edge[4], &edge[1].inverse()],
+    ///    wire![&edge[0], &edge[5], &edge[2].inverse()],
+    ///    wire![&edge[0], &edge[6], &edge[3].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// // The shell is irregular because three faces share edge[0].
@@ -866,10 +980,10 @@ pub enum ShellCondition {
     ///     Edge::new(&v[4], &v[5], ()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[2], &edge[1].inverse()]),
-    ///     Wire::from_iter(vec![&edge[3], &edge[7], &edge[4].inverse()]),
-    ///     Wire::from_iter(vec![&edge[5], &edge[8], &edge[6].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2], &edge[5], &edge[4].inverse()]),
+    ///     wire![&edge[0], &edge[2], &edge[1].inverse()],
+    ///     wire![&edge[3], &edge[7], &edge[4].inverse()],
+    ///     wire![&edge[5], &edge[8], &edge[6].inverse()],
+    ///     wire![&edge[2], &edge[5], &edge[4].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// // This shell is regular, but not oriented.
@@ -895,10 +1009,10 @@ pub enum ShellCondition {
     ///     Edge::new(&v[4], &v[5] ,()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[2], &edge[1].inverse()]),
-    ///     Wire::from_iter(vec![&edge[3], &edge[7], &edge[4].inverse()]),
-    ///     Wire::from_iter(vec![&edge[5], &edge[8], &edge[6].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2].inverse(), &edge[4], &edge[5].inverse()]),
+    ///     wire![&edge[0], &edge[2], &edge[1].inverse()],
+    ///     wire![&edge[3], &edge[7], &edge[4].inverse()],
+    ///     wire![&edge[5], &edge[8], &edge[6].inverse()],
+    ///     wire![&edge[2].inverse(), &edge[4], &edge[5].inverse()],
     /// ];
     /// let shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// // The orientations of all faces in the shell are compatible on the shared edges.
@@ -927,12 +1041,12 @@ pub enum ShellCondition {
     ///     Edge::new(&v[7], &v[4] ,()),
     /// ];
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&edge[0], &edge[1], &edge[2], &edge[3]]),
-    ///     Wire::from_iter(vec![&edge[0].inverse(), &edge[4], &edge[8], &edge[5].inverse()]),
-    ///     Wire::from_iter(vec![&edge[1].inverse(), &edge[5], &edge[9], &edge[6].inverse()]),
-    ///     Wire::from_iter(vec![&edge[2].inverse(), &edge[6], &edge[10], &edge[7].inverse()]),
-    ///     Wire::from_iter(vec![&edge[3].inverse(), &edge[7], &edge[11], &edge[4].inverse()]),
-    ///     Wire::from_iter(vec![&edge[8], &edge[9], &edge[10], &edge[11]]),
+    ///     wire![&edge[0], &edge[1], &edge[2], &edge[3]],
+    ///     wire![&edge[0].inverse(), &edge[4], &edge[8], &edge[5].inverse()],
+    ///     wire![&edge[1].inverse(), &edge[5], &edge[9], &edge[6].inverse()],
+    ///     wire![&edge[2].inverse(), &edge[6], &edge[10], &edge[7].inverse()],
+    ///     wire![&edge[3].inverse(), &edge[7], &edge[11], &edge[4].inverse()],
+    ///     wire![&edge[8], &edge[9], &edge[10], &edge[11]],
     /// ];
     /// let mut shell: Shell<_, _, _> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// shell[5].invert();
@@ -1018,8 +1132,10 @@ where T: Eq + Clone + Hash {
     adjacency.is_empty()
 }
 
-fn create_components<T>(adjacency: &mut HashMap<T, Vec<T>>) -> Vec<Vec<T>>
-where T: Eq + Clone + Hash {
+fn create_components<T, U>(adjacency: &mut HashMap<T, Vec<U>>) -> Vec<Vec<T>>
+where
+    T: Eq + Clone + Hash,
+    U: As<T>, {
     let mut res = Vec::new();
     loop {
         let component = create_one_component(adjacency);
@@ -1031,29 +1147,27 @@ where T: Eq + Clone + Hash {
     res
 }
 
-fn create_one_component<T>(adjacency: &mut HashMap<T, Vec<T>>) -> Vec<T>
-where T: Eq + Hash + Clone {
+fn create_one_component<T, U>(adjacency: &mut HashMap<T, Vec<U>>) -> Vec<T>
+where
+    T: Eq + Hash + Clone,
+    U: As<T>, {
     let mut iter = adjacency.keys();
     let first = match iter.next() {
         Some(key) => key.clone(),
         None => return Vec::new(),
     };
-    let mut stack = vec![first];
+    let mut stack = vec![first.as_()];
     let mut res = Vec::new();
     while let Some(i) = stack.pop() {
         if let Some(vec) = adjacency.remove(&i) {
             res.push(i);
-            for j in vec {
-                stack.push(j);
-            }
+            stack.extend(vec.into_iter().map(|x| x.as_()));
         }
     }
     res
 }
 
-impl<'a, P: Debug, C: Debug, S: Debug> Debug
-    for DebugDisplay<'a, Shell<P, C, S>, ShellDisplayFormat>
-{
+impl<P: Debug, C: Debug, S: Debug> Debug for DebugDisplay<'_, Shell<P, C, S>, ShellDisplayFormat> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.format {
             ShellDisplayFormat::FacesList { face_format } => f

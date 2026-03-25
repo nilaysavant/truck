@@ -17,21 +17,16 @@ async fn init_default_device(
     let backends = Backends::PRIMARY;
     #[cfg(feature = "webgl")]
     let backends = Backends::all();
-    let instance = Instance::new(InstanceDescriptor {
+    let instance = Instance::new(&InstanceDescriptor {
         backends,
         ..Default::default()
     });
 
-    // trust winit
-    #[allow(unsafe_code)]
-    let surface = unsafe {
-        let window = window.as_ref();
-        window.map(|window| {
-            instance
-                .create_surface(window.as_ref())
-                .expect("Failed to create `Surface`")
-        })
-    };
+    let surface = window.as_ref().map(|window| {
+        instance
+            .create_surface(Arc::clone(window))
+            .expect("Failed to create `Surface`")
+    });
 
     let adapter = instance
         .request_adapter(&RequestAdapterOptions {
@@ -46,24 +41,20 @@ async fn init_default_device(
         .expect("Failed to find an appropriate adapter");
 
     let (device, queue) = adapter
-        .request_device(
-            &DeviceDescriptor {
-                features: Default::default(),
-                #[cfg(not(feature = "webgl"))]
-                limits: Limits::downlevel_defaults().using_resolution(adapter.limits()),
-                #[cfg(feature = "webgl")]
-                limits: Limits::downlevel_webgl2_defaults(),
-                label: None,
-            },
-            None,
-        )
+        .request_device(&DeviceDescriptor {
+            required_features: Default::default(),
+            memory_hints: MemoryHints::Performance,
+            #[cfg(not(feature = "webgl"))]
+            required_limits: Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            #[cfg(feature = "webgl")]
+            required_limits: Limits::downlevel_webgl2_defaults(),
+            label: None,
+            trace: Default::default(),
+            experimental_features: ExperimentalFeatures::disabled(),
+        })
         .await
         .expect("Failed to create device");
-    let device_handler = DeviceHandler {
-        adapter: Arc::new(adapter),
-        device: Arc::new(device),
-        queue: Arc::new(queue),
-    };
+    let device_handler = DeviceHandler::new(adapter, device, queue);
     let window_handler = window.map(|window| WindowHandler {
         window,
         surface: Arc::new(surface.unwrap()),
@@ -74,11 +65,7 @@ async fn init_default_device(
 impl DeviceHandler {
     /// constructor
     #[inline(always)]
-    pub const fn new(
-        adapter: Arc<Adapter>,
-        device: Arc<Device>,
-        queue: Arc<Queue>,
-    ) -> DeviceHandler {
+    pub const fn new(adapter: Adapter, device: Device, queue: Queue) -> DeviceHandler {
         DeviceHandler {
             adapter,
             device,
@@ -87,13 +74,13 @@ impl DeviceHandler {
     }
     /// Returns the reference of the adapter.
     #[inline(always)]
-    pub const fn adapter(&self) -> &Arc<Adapter> { &self.adapter }
+    pub const fn adapter(&self) -> &Adapter { &self.adapter }
     /// Returns the reference of the device.
     #[inline(always)]
-    pub const fn device(&self) -> &Arc<Device> { &self.device }
+    pub const fn device(&self) -> &Device { &self.device }
     /// Returns the reference of the queue.
     #[inline(always)]
-    pub const fn queue(&self) -> &Arc<Queue> { &self.queue }
+    pub const fn queue(&self) -> &Queue { &self.queue }
 
     /// Creates default device handler.
     pub async fn default_device() -> Self { init_default_device(None).await.0 }
@@ -142,6 +129,7 @@ impl RenderTextureConfig {
             alpha_mode: CompositeAlphaMode::Auto,
             present_mode: PresentMode::Fifo,
             view_formats: Vec::new(),
+            desired_maximum_frame_latency: 2,
         }
     }
 }
@@ -229,7 +217,7 @@ impl SceneDescriptor {
     }
 
     fn backend_buffers(&self, device: &Device) -> (Option<Texture>, Option<Texture>) {
-        let foward_depth = if self.backend_buffer.depth_test {
+        let forward_depth = if self.backend_buffer.depth_test {
             Some(Self::depth_texture(
                 device,
                 self.render_texture.canvas_size,
@@ -247,7 +235,7 @@ impl SceneDescriptor {
         } else {
             None
         };
-        (foward_depth, sampling_buffer)
+        (forward_depth, sampling_buffer)
     }
 }
 
@@ -257,21 +245,21 @@ impl SceneDescriptor {
 #[derive(Debug)]
 pub struct SceneDescriptorMut<'a>(&'a mut Scene);
 
-impl<'a> std::ops::Deref for SceneDescriptorMut<'a> {
+impl std::ops::Deref for SceneDescriptorMut<'_> {
     type Target = SceneDescriptor;
     #[inline(always)]
     fn deref(&self) -> &SceneDescriptor { &self.0.scene_desc }
 }
 
-impl<'a> std::ops::DerefMut for SceneDescriptorMut<'a> {
+impl std::ops::DerefMut for SceneDescriptorMut<'_> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut SceneDescriptor { &mut self.0.scene_desc }
 }
 
-impl<'a> Drop for SceneDescriptorMut<'a> {
+impl Drop for SceneDescriptorMut<'_> {
     fn drop(&mut self) {
         let (forward_depth, sampling_buffer) = self.backend_buffers(self.0.device());
-        self.0.foward_depth = forward_depth;
+        self.0.forward_depth = forward_depth;
         self.0.sampling_buffer = sampling_buffer;
     }
 }
@@ -334,14 +322,14 @@ impl Scene {
     #[inline(always)]
     pub fn new(device_handler: DeviceHandler, scene_desc: &SceneDescriptor) -> Scene {
         let device = device_handler.device();
-        let (foward_depth, sampling_buffer) = scene_desc.backend_buffers(device);
+        let (forward_depth, sampling_buffer) = scene_desc.backend_buffers(device);
         let bind_group_layout = Self::init_scene_bind_group_layout(device);
         Scene {
             objects: Default::default(),
             bind_group_layout,
-            foward_depth,
+            forward_depth,
             sampling_buffer,
-            clock: instant::Instant::now(),
+            clock: TimeInstant::now(),
             scene_desc: scene_desc.clone(),
             device_handler,
         }
@@ -381,13 +369,17 @@ impl Scene {
     #[inline(always)]
     pub const fn device_handler(&self) -> &DeviceHandler { &self.device_handler }
 
+    /// Returns the reference of the adapter.
+    #[inline(always)]
+    pub const fn dapter(&self) -> &Adapter { &self.device_handler.adapter }
+
     /// Returns the reference of the device.
     #[inline(always)]
-    pub const fn device(&self) -> &Arc<Device> { &self.device_handler.device }
+    pub const fn device(&self) -> &Device { &self.device_handler.device }
 
     /// Returns the reference of the queue.
     #[inline(always)]
-    pub const fn queue(&self) -> &Arc<Queue> { &self.device_handler.queue }
+    pub const fn queue(&self) -> &Queue { &self.device_handler.queue }
 
     /// Returns the elapsed time since the scene was created.
     #[inline(always)]
@@ -687,7 +679,7 @@ impl Scene {
     pub fn render(&self, view: &TextureView) {
         let bind_group = self.scene_bind_group();
         let depth_view = self
-            .foward_depth
+            .forward_depth
             .as_ref()
             .map(|tex| tex.create_view(&Default::default()));
         let sampled_view = self
@@ -710,6 +702,7 @@ impl Scene {
                         load: LoadOp::Clear(self.scene_desc.studio.background),
                         store: StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: depth_view
                     .as_ref()
@@ -722,13 +715,12 @@ impl Scene {
                     continue;
                 }
                 rpass.set_pipeline(&object.pipeline);
-                rpass.set_bind_group(1, &object.bind_group, &[]);
+                rpass.set_bind_group(1, Some(object.bind_group.as_ref()), &[]);
                 rpass.set_vertex_buffer(0, object.vertex_buffer.buffer.slice(..));
                 match object.index_buffer {
                     Some(ref index_buffer) => {
                         rpass.set_index_buffer(index_buffer.buffer.slice(..), IndexFormat::Uint32);
-                        let index_size =
-                            index_buffer.size as u32 / std::mem::size_of::<u32>() as u32;
+                        let index_size = index_buffer.size as u32 / size_of::<u32>() as u32;
                         rpass.draw_indexed(0..index_size, 0, 0..1);
                     }
                     None => rpass.draw(
@@ -758,15 +750,15 @@ impl Scene {
         });
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
         encoder.copy_texture_to_buffer(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
-            ImageCopyBuffer {
+            TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: ImageDataLayout {
+                layout: TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * 4),
                     rows_per_image: Some(height),
@@ -782,7 +774,11 @@ impl Scene {
         let buffer_slice = buffer.slice(..);
         let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
         buffer_slice.map_async(MapMode::Read, move |v| sender.send(v).unwrap());
-        device.poll(Maintain::Wait);
+        let poll_type = PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        };
+        device.poll(poll_type).unwrap();
         match receiver.receive().await {
             Some(Ok(_)) => buffer_slice.get_mapped_range().iter().copied().collect(),
             Some(Err(e)) => panic!("{}", e),
@@ -819,10 +815,10 @@ impl WindowScene {
     }
     /// Get the reference of initializing window.
     #[inline(always)]
-    pub fn window(&self) -> &Arc<Window> { &self.window_handler.window }
+    pub const fn window(&self) -> &Arc<Window> { &self.window_handler.window }
     /// Get the reference of surface.
     #[inline(always)]
-    pub fn surface(&self) -> &Arc<Surface> { &self.window_handler.surface }
+    pub const fn surface(&self) -> &Arc<Surface<'_>> { &self.window_handler.surface }
     /// Adjusts the size of the backend buffers (depth or sampling buffer) to the size of the window.
     pub fn size_alignment(&mut self) {
         let size = self.window().inner_size();
@@ -855,7 +851,7 @@ impl WindowScene {
         };
         let view = surface_texture
             .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            .create_view(&TextureViewDescriptor::default());
         self.render(&view);
         surface_texture.present();
     }

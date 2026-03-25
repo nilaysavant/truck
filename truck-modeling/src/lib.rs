@@ -18,7 +18,8 @@
 /// re-export `truck_base`.
 pub mod base {
     pub use truck_base::{
-        assert_near, assert_near2, bounding_box::BoundingBox, cgmath64::*, tolerance::*,
+        assert_near, assert_near2, bounding_box::BoundingBox, cgmath64::*, prop_assert_near,
+        prop_assert_near2, tolerance::*,
     };
     pub use truck_geotrait::*;
 }
@@ -30,28 +31,8 @@ pub use geometry::*;
 
 /// topological elements
 pub mod topology {
-    use super::*;
-    /// Vertex, the minimum topological unit.
-    pub type Vertex = truck_topology::Vertex<Point3>;
-    /// Edge, which consists two vertices.
-    pub type Edge = truck_topology::Edge<Point3, Curve>;
-    /// Wire, a path or cycle which consists some edges.
-    pub type Wire = truck_topology::Wire<Point3, Curve>;
-    /// Face, attached to a simple and closed wire.
-    pub type Face = truck_topology::Face<Point3, Curve, Surface>;
-    /// Shell, a connected compounded faces.
-    pub type Shell = truck_topology::Shell<Point3, Curve, Surface>;
-    /// Solid, attached to a closed shells.
-    pub type Solid = truck_topology::Solid<Point3, Curve, Surface>;
-
-    /// The id of vertex. `Copy` trait is implemented.
-    pub type VertexID = truck_topology::VertexID<Point3>;
-    /// The id that does not depend on the direction of the edge.
-    pub type EdgeID = truck_topology::EdgeID<Curve>;
-    /// The id that does not depend on the direction of the face.
-    pub type FaceID = truck_topology::FaceID<Surface>;
-
-    pub use truck_topology::shell::ShellCondition;
+    use crate::{Curve, Point3, Surface};
+    truck_topology::prelude!(Point3, Curve, Surface, pub);
 }
 pub use topology::*;
 
@@ -61,90 +42,55 @@ pub use topology::*;
 /// [`Sweep`]: ./topo_traits/trait.Sweep.html
 /// [`ClosedSweep`]: ./topo_traits/trait.ClosedSweep.html
 pub mod topo_traits {
+    /// Creates closure for transformation
+    pub trait GeometricMapping<T>: Copy {
+        /// Creates closure for transformation
+        fn mapping(self) -> impl Fn(&T) -> T;
+    }
+
+    /// Creates closure for connect two geometries
+    pub trait Connector<T, H>: Copy {
+        /// Creates closure for connect two geometries
+        fn connector(self) -> impl Fn(&T, &T) -> H;
+    }
+
     /// Mapping, duplicates and moves a topological element.
-    pub trait Mapped<P, C, S>: Sized {
+    pub trait Mapped<T>: Sized {
         /// Returns a new topology whose points are mapped by `point_closure`,
         /// curves are mapped by `curve_closure`,
         /// and surfaces are mapped by `surface_closure`.
         #[doc(hidden)]
-        fn mapped<FP: Fn(&P) -> P, FC: Fn(&C) -> C, FS: Fn(&S) -> S>(
-            &self,
-            point_mapping: &FP,
-            curve_mapping: &FC,
-            surface_mapping: &FS,
-        ) -> Self;
-
-        /// Returns another topology whose points, curves, and surfaces are cloned.
-        fn topological_clone(&self) -> Self
-        where
-            P: Clone,
-            C: Clone,
-            S: Clone, {
-            self.mapped(&Clone::clone, &Clone::clone, &Clone::clone)
-        }
+        fn mapped(&self, trans: T) -> Self;
     }
 
     /// Abstract sweeping, builds a circle-arc, a prism, a half torus, and so on.
-    pub trait Sweep<P, C, S> {
-        /// The struct of sweeped topology.
-        type Swept;
+    pub trait Sweep<T, Pc, Cc, Swept> {
         /// Transform topologies and connect vertices and edges in boundaries.
-        fn sweep<
-            FP: Fn(&P) -> P,
-            FC: Fn(&C) -> C,
-            FS: Fn(&S) -> S,
-            CP: Fn(&P, &P) -> C,
-            CE: Fn(&C, &C) -> S,
-        >(
-            &self,
-            point_mapping: &FP,
-            curve_mapping: &FC,
-            surface_mapping: &FS,
-            connect_points: &CP,
-            connect_curve: &CE,
-        ) -> Self::Swept;
+        fn sweep(&self, trans: T, point_connector: Pc, curve_connector: Cc) -> Swept;
     }
 
     /// Abstract multi sweeping, builds a circle-arc, a prism, a half torus, and so on.
-    pub trait MultiSweep<P, C, S> {
-        /// The struct of sweeped topology.
-        type Swept;
+    pub trait MultiSweep<T, Pc, Cc, Swept> {
         /// Transform topologies and connect vertices and edges in boundaries.
-        fn multi_sweep<
-            FP: Fn(&P) -> P,
-            FC: Fn(&C) -> C,
-            FS: Fn(&S) -> S,
-            CP: Fn(&P, &P) -> C,
-            CE: Fn(&C, &C) -> S,
-        >(
+        fn multi_sweep(
             &self,
-            point_mapping: &FP,
-            curve_mapping: &FC,
-            surface_mapping: &FS,
-            connect_points: &CP,
-            connect_curve: &CE,
+            trans: T,
+            point_connector: Pc,
+            curve_connector: Cc,
             division: usize,
-        ) -> Self::Swept;
+        ) -> Swept;
     }
 
     /// closed sweep, builds a closed torus, and so on.
-    pub trait ClosedSweep<P, C, S>: MultiSweep<P, C, S> {
+    pub trait ClosedSweep<T, Pc, Cc, Swept>: MultiSweep<T, Pc, Cc, Swept> {
         /// Transform topologies and connect vertices and edges in boundaries.
-        fn closed_sweep<
-            FP: Fn(&P) -> P,
-            FC: Fn(&C) -> C,
-            FS: Fn(&S) -> S,
-            CP: Fn(&P, &P) -> C,
-            CE: Fn(&C, &C) -> S,
-        >(
+        fn closed_sweep(
             &self,
-            point_mapping: &FP,
-            curve_mapping: &FC,
-            surface_mapping: &FS,
-            connect_points: &CP,
-            connect_curves: &CE,
+            trans: T,
+            point_connector: Pc,
+            curve_connector: Cc,
             division: usize,
-        ) -> Self::Swept;
+        ) -> Swept;
     }
 }
 pub use topo_traits::*;
@@ -160,5 +106,7 @@ pub mod errors;
 mod geom_impls;
 mod mapped;
 mod multi_sweep;
+/// primitive shapes
+pub mod primitive;
 mod sweep;
 mod topo_impls;

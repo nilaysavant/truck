@@ -1,4 +1,5 @@
 use super::*;
+use algo::surface::SspVector;
 
 impl<C, V: Copy> ExtrudedCurve<C, V> {
     /// Creates a linear extruded curve by extrusion.
@@ -25,6 +26,15 @@ where
 {
     type Point = C::Point;
     type Vector = C::Vector;
+    #[inline(always)]
+    fn der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
+        match (m, n) {
+            (0, 0) => self.subs(u, v).to_vec(),
+            (0, 1) => self.vector,
+            (_, 0) => self.curve.der_n(m, u),
+            _ => C::Vector::zero(),
+        }
+    }
     #[inline(always)]
     fn subs(&self, u: f64, v: f64) -> C::Point { self.curve.subs(u) + self.vector * v }
     #[inline(always)]
@@ -76,12 +86,17 @@ impl<C: ParameterDivision1D, V> ParameterDivision2D for ExtrudedCurve<C, V> {
     }
 }
 
-impl<C: ParametricCurve2D + BoundedCurve> SearchParameter<D2> for ExtrudedCurve<C, Vector2> {
-    type Point = Point2;
+impl<P, C> SearchParameter<D2> for ExtrudedCurve<C, P::Diff>
+where
+    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P::Diff: SspVector<Point = P>,
+    C: ParametricCurve<Point = P, Vector = P::Diff> + BoundedCurve,
+{
+    type Point = P;
     #[inline(always)]
     fn search_parameter<H: Into<SPHint2D>>(
         &self,
-        point: Point2,
+        point: P,
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
@@ -94,29 +109,7 @@ impl<C: ParametricCurve2D + BoundedCurve> SearchParameter<D2> for ExtrudedCurve<
                 algo::surface::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
             }
         };
-        algo::surface::search_parameter2d(self, point, hint, trials)
-    }
-}
-
-impl<C: ParametricCurve3D + BoundedCurve> SearchParameter<D2> for ExtrudedCurve<C, Vector3> {
-    type Point = Point3;
-    #[inline(always)]
-    fn search_parameter<H: Into<SPHint2D>>(
-        &self,
-        point: Point3,
-        hint: H,
-        trials: usize,
-    ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SPHint2D::Parameter(x, y) => (x, y),
-            SPHint2D::Range(range0, range1) => {
-                algo::surface::presearch(self, point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SPHint2D::None => {
-                algo::surface::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        algo::surface::search_parameter3d(self, point, hint, trials)
+        algo::surface::search_parameter(self, point, hint, trials)
     }
 }
 
@@ -154,37 +147,41 @@ impl<C: Invertible> Invertible for ExtrudedCurve<C, Vector3> {
     }
 }
 
-#[test]
-fn extruded_curve_test() {
-    let cpts = vec![
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-    ];
-    let spts = vec![
-        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 1.0)],
-        vec![Point3::new(0.0, 1.0, 0.0), Point3::new(0.0, 1.0, 1.0)],
-        vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)],
-    ];
-    let curve = BSplineCurve::new(KnotVec::bezier_knot(2), cpts);
-    let surface0 = ExtrudedCurve::by_extrusion(curve, Vector3::unit_z());
-    let surface1 = BSplineSurface::new((KnotVec::bezier_knot(2), KnotVec::bezier_knot(1)), spts);
-    assert_eq!(surface0.range_tuple(), surface1.range_tuple());
-    const N: usize = 10;
-    for i in 0..=N {
-        for j in 0..=N {
-            let u = i as f64 / N as f64;
-            let v = j as f64 / N as f64;
-            assert_near!(
-                surface0.subs(u, v),
-                ParametricSurface::subs(&surface1, u, v)
-            );
-            assert_near!(surface0.uder(u, v), surface1.uder(u, v));
-            assert_near!(surface0.vder(u, v), surface1.vder(u, v));
-            assert_near!(surface0.uuder(u, v), surface1.uuder(u, v));
-            assert_near!(surface0.uvder(u, v), surface1.uvder(u, v));
-            assert_near!(surface0.vvder(u, v), surface1.vvder(u, v));
-            assert_near!(surface0.normal(u, v), surface1.normal(u, v));
+impl<C: Transformed<Matrix4>> Transformed<Matrix4> for ExtrudedCurve<C, Vector3> {
+    fn transform_by(&mut self, trans: Matrix4) {
+        self.curve.transform_by(trans);
+        self.vector = trans.transform_vector(self.vector);
+    }
+    fn transformed(&self, trans: Matrix4) -> Self {
+        Self {
+            curve: self.curve.transformed(trans),
+            vector: trans.transform_vector(self.vector),
         }
     }
+}
+
+impl From<ExtrudedCurve<Line<Point3>, Vector3>> for Plane {
+    fn from(
+        ExtrudedCurve {
+            curve: Line(o, p),
+            vector,
+        }: ExtrudedCurve<Line<Point3>, Vector3>,
+    ) -> Self {
+        Self::new(o, p, o + vector)
+    }
+}
+
+impl ToSameGeometry<Plane> for ExtrudedCurve<Line<Point3>, Vector3> {
+    fn to_same_geometry(&self) -> Plane { (*self).into() }
+}
+
+#[test]
+fn extrude_line() {
+    let p = Point3::new(1.0, 2.0, 3.0);
+    let q = Point3::new(2.0, 3.0, 4.0);
+    let v = Vector3::new(-1.0, 1.0, -4.0);
+    let line = Line(p, q);
+    let extruded = ExtrudedCurve::by_extrusion(line, v);
+    let plane = Plane::new(p, q, p + v);
+    assert_near!(extruded.subs(0.3, 0.6), plane.subs(0.3, 0.6));
 }

@@ -1,3 +1,5 @@
+use newton::Jacobian;
+
 use super::*;
 
 /// Divides the domain into equal parts, examines all the values, and returns `(u, v)` such that `surface.subs(u, v)` is closest to `point`.
@@ -13,7 +15,7 @@ where
     S::Point: MetricSpace<Metric = f64> + Copy,
 {
     let mut res = (0.0, 0.0);
-    let mut min = std::f64::INFINITY;
+    let mut min = f64::INFINITY;
     let ((u0, u1), (v0, v1)) = (urange, vrange);
     for i in 0..=division {
         for j in 0..=division {
@@ -31,147 +33,186 @@ where
     res
 }
 
-/// Searches the nearest parameter by Newton's method.
-pub fn search_nearest_parameter<S>(
+/// Vectors whose points returned by the surface that can be the target of [`search_nearest_parameter`].
+pub trait SsnpVector: InnerSpace<Scalar = f64> + Tolerance {
+    #[doc(hidden)]
+    type Point;
+    #[doc(hidden)]
+    type Matrix: Jacobian<Self>;
+    #[doc(hidden)]
+    fn subs<S>(surface: &S, point: Self::Point, param: Self) -> CalcOutput<Self, Self::Matrix>
+    where S: ParametricSurface<Point = Self::Point, Vector = Self>;
+    #[doc(hidden)]
+    fn into_param(self) -> (f64, f64);
+    #[doc(hidden)]
+    fn from_param(param: (f64, f64)) -> Self;
+}
+
+impl SsnpVector for Vector2 {
+    type Point = Point2;
+    type Matrix = Matrix2;
+    fn subs<S>(
+        surface: &S,
+        point: Point2,
+        Vector2 { x: u, y: v }: Vector2,
+    ) -> CalcOutput<Self, Matrix2>
+    where
+        S: ParametricSurface<Point = Point2, Vector = Vector2>,
+    {
+        CalcOutput {
+            value: surface.subs(u, v) - point,
+            derivation: Matrix2::from_cols(surface.uder(u, v), surface.vder(u, v)),
+        }
+    }
+    fn into_param(self) -> (f64, f64) { self.into() }
+    fn from_param(param: (f64, f64)) -> Self { param.into() }
+}
+
+impl SsnpVector for Vector3 {
+    type Point = Point3;
+    type Matrix = Matrix3;
+    fn subs<S>(
+        surface: &S,
+        point: Self::Point,
+        Vector3 { x: u, y: v, z: w }: Vector3,
+    ) -> CalcOutput<Self, Self::Matrix>
+    where
+        S: ParametricSurface<Point = Self::Point, Vector = Self>,
+    {
+        let diff = surface.subs(u, v) - point;
+        let uder = surface.uder(u, v);
+        let vder = surface.vder(u, v);
+        let uuder = surface.uuder(u, v);
+        let uvder = surface.uvder(u, v);
+        let vvder = surface.vvder(u, v);
+        let uv_cross = uder.cross(vder);
+        CalcOutput {
+            value: diff + uv_cross * w,
+            derivation: Matrix3::from_cols(
+                uder + (uuder.cross(vder) + uder.cross(uvder)) * w,
+                vder + (uvder.cross(vder) + uder.cross(vvder)) * w,
+                uv_cross,
+            ),
+        }
+    }
+    fn into_param(self) -> (f64, f64) { self.truncate().into() }
+    fn from_param((u, v): (f64, f64)) -> Self { Self::new(u, v, 0.0) }
+}
+
+/// Searches the parameter by Newton's method.
+#[inline(always)]
+pub fn search_nearest_parameter<P, S>(
     surface: &S,
-    point: S::Point,
-    mut hint: (f64, f64),
+    point: P,
+    hint: (f64, f64),
     trials: usize,
 ) -> Option<(f64, f64)>
 where
-    S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64, Diff = S::Vector>,
-    S::Vector: InnerSpace<Scalar = f64> + Tolerance,
+    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64>,
+    P::Diff: SsnpVector<Point = P>,
+    S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
-    let mut log = NewtonLog::default();
-    for _ in 0..=trials {
-        log.push(hint);
-        let (u0, v0) = hint;
-        let s = surface.subs(u0, v0);
-        let ud = surface.uder(u0, v0);
-        let vd = surface.vder(u0, v0);
-        let uud = surface.uuder(u0, v0);
-        let uvd = surface.uvder(u0, v0);
-        let vvd = surface.vvder(u0, v0);
-        let f = Vector2::new(ud.dot(s - point), vd.dot(s - point));
-        let a = uud.dot(s - point) + ud.dot(ud);
-        let c = uvd.dot(s - point) + ud.dot(vd);
-        let b = vvd.dot(s - point) + vd.dot(vd);
-        let fprime = Matrix2::new(a, c, c, b);
-        let dermag2 = f64::min(1.0, ud.magnitude2());
-        let dermag2 = f64::min(dermag2, vd.magnitude2());
-        if f.magnitude2() < TOLERANCE2 * dermag2 || fprime.determinant().so_small() {
-            return Some(hint);
-        } else {
-            hint = (Vector2::from(hint) - fprime.invert()? * f).into();
-        }
-    }
-    log.print_error();
-    None
+    let function = move |param: P::Diff| SsnpVector::subs(surface, point, param);
+    let res = newton::solve(function, P::Diff::from_param(hint), trials);
+    res.ok().map(P::Diff::into_param)
 }
 
-/// Searches the parameter by Newton's method.
-#[inline(always)]
-pub fn search_parameter2d<S: ParametricSurface<Point = Point2, Vector = Vector2>>(
-    surface: &S,
-    point: Point2,
-    mut hint: (f64, f64),
-    trials: usize,
-) -> Option<(f64, f64)> {
-    let mut log = NewtonLog::default();
-    for _ in 0..=trials {
-        log.push(hint);
-        let (u0, v0) = hint;
-        let pt = surface.subs(u0, v0);
-        let uder = surface.uder(u0, v0);
-        let vder = surface.vder(u0, v0);
-        let dermag2 = f64::min(0.05, uder.magnitude2());
-        let dermag2 = f64::min(dermag2, vder.magnitude2());
-        if pt.distance2(point) < TOLERANCE2 * dermag2 {
-            return Some(hint);
-        }
-        let inv = Matrix2::from_cols(uder, vder).invert()?;
-        hint = (Vector2::from(hint) - inv * (pt - point)).into();
-    }
-    log.print_error();
-    None
+/// Vectors whose points returned by the surface that can be the target of [`search_parameter`].
+pub trait SspVector: InnerSpace<Scalar = f64> + Tolerance {
+    #[doc(hidden)]
+    type Point;
+    #[doc(hidden)]
+    fn subs<S>(surface: &S, point: Self::Point, param: Vector2) -> CalcOutput<Vector2, Matrix2>
+    where S: ParametricSurface<Point = Self::Point, Vector = Self>;
 }
 
-#[derive(Clone, Debug)]
-struct ProjectedSurface<'a, S> {
-    surface: &'a S,
-    origin: Point3,
-    u_axis: Vector3,
-    v_axis: Vector3,
-}
-
-impl<'a, S: ParametricSurface3D> ProjectedSurface<'a, S> {
-    fn new(surface: &'a S, (u, v): (f64, f64)) -> Self {
-        let origin = surface.subs(u, v);
-        let normal = surface.normal(u, v);
-        let tmp = normal.map(f64::abs);
-        let max = match (tmp[0] < tmp[1], tmp[1] < tmp[2], tmp[2] < tmp[0]) {
-            (false, _, true) => 0,
-            (true, false, _) => 1,
-            (_, true, false) => 2,
-            (false, false, false) => 0, // all componets have same values
-            (true, true, true) => unreachable!(),
-        };
-        let mut u_axis = Vector3::zero();
-        u_axis[max] = -normal[(max + 1) % 3];
-        u_axis[(max + 1) % 3] = normal[max];
-        let mut v_axis = Vector3::zero();
-        v_axis[max] = -normal[(max + 2) % 3];
-        v_axis[(max + 2) % 3] = normal[max];
-        ProjectedSurface {
-            surface,
-            origin,
-            u_axis,
-            v_axis,
-        }
-    }
-    #[inline(always)]
-    fn vector_proj(&self, vector: Vector3) -> Vector2 {
-        Vector2::new(self.u_axis.dot(vector), self.v_axis.dot(vector))
-    }
-    #[inline(always)]
-    fn point_proj(&self, point: Point3) -> Point2 {
-        Point2::from_vec(self.vector_proj(point - self.origin))
-    }
-}
-
-impl<'a, S: ParametricSurface3D> ParametricSurface for ProjectedSurface<'a, S> {
+impl SspVector for Vector2 {
     type Point = Point2;
-    type Vector = Vector2;
-    #[inline(always)]
-    fn subs(&self, u: f64, v: f64) -> Point2 { self.point_proj(self.surface.subs(u, v)) }
-    #[inline(always)]
-    fn uder(&self, u: f64, v: f64) -> Vector2 { self.vector_proj(self.surface.uder(u, v)) }
-    #[inline(always)]
-    fn vder(&self, u: f64, v: f64) -> Vector2 { self.vector_proj(self.surface.vder(u, v)) }
-    #[inline(always)]
-    fn uuder(&self, u: f64, v: f64) -> Vector2 { self.vector_proj(self.surface.uuder(u, v)) }
-    #[inline(always)]
-    fn uvder(&self, u: f64, v: f64) -> Vector2 { self.vector_proj(self.surface.uvder(u, v)) }
-    #[inline(always)]
-    fn vvder(&self, u: f64, v: f64) -> Vector2 { self.vector_proj(self.surface.vvder(u, v)) }
+    fn subs<S>(
+        surface: &S,
+        point: Point2,
+        Vector2 { x: u, y: v }: Vector2,
+    ) -> CalcOutput<Vector2, Matrix2>
+    where
+        S: ParametricSurface<Point = Point2, Vector = Vector2>,
+    {
+        CalcOutput {
+            value: surface.subs(u, v) - point,
+            derivation: Matrix2::from_cols(surface.uder(u, v), surface.vder(u, v)),
+        }
+    }
+}
+
+impl SspVector for Vector3 {
+    type Point = Point3;
+    fn subs<S>(
+        surface: &S,
+        point: Self::Point,
+        Vector2 { x: u, y: v }: Vector2,
+    ) -> CalcOutput<Vector2, Matrix2>
+    where
+        S: ParametricSurface<Point = Self::Point, Vector = Self>,
+    {
+        let diff = surface.subs(u, v) - point;
+        let uder = surface.uder(u, v);
+        let vder = surface.vder(u, v);
+        CalcOutput {
+            value: Vector2::new(uder.dot(diff), vder.dot(diff)),
+            derivation: Matrix2::new(
+                uder.dot(uder),
+                uder.dot(vder),
+                uder.dot(vder),
+                vder.dot(vder),
+            ),
+        }
+    }
 }
 
 /// Searches the parameter by Newton's method.
 #[inline(always)]
-pub fn search_parameter3d<S: ParametricSurface3D>(
+pub fn search_parameter<P, S>(
     surface: &S,
-    point: Point3,
-    (u0, v0): (f64, f64),
+    point: P,
+    hint: (f64, f64),
     trials: usize,
-) -> Option<(f64, f64)> {
-    let proj = ProjectedSurface::new(surface, (u0, v0));
-    search_parameter2d(&proj, proj.point_proj(point), (u0, v0), trials).and_then(|(u, v)| {
-        match surface.subs(u, v).near(&point) {
+) -> Option<(f64, f64)>
+where
+    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P::Diff: SspVector<Point = P>,
+    S: ParametricSurface<Point = P, Vector = P::Diff>,
+{
+    let function = move |param: Vector2| SspVector::subs(surface, point, param);
+    let res = newton::solve(function, hint.into(), trials);
+    res.ok().and_then(
+        |Vector2 { x: u, y: v }| match surface.subs(u, v).near(&point) {
             true => Some((u, v)),
             false => None,
-        }
-    })
+        },
+    )
+}
+
+/// Searches the parameters of the intersection point of `surface` and `curve`.
+pub fn search_intersection_parameter<C, S>(
+    surface: &S,
+    hint0: (f64, f64),
+    curve: &C,
+    hint1: f64,
+    trials: usize,
+) -> Option<((f64, f64), f64)>
+where
+    C: ParametricCurve3D,
+    S: ParametricSurface3D,
+{
+    let function = move |Vector3 { x, y, z }| CalcOutput {
+        value: surface.subs(x, y) - curve.subs(z),
+        derivation: Matrix3::from_cols(surface.uder(x, y), surface.vder(x, y), -curve.der(z)),
+    };
+    let hint = Vector3::new(hint0.0, hint0.1, hint1);
+    let Vector3 { x, y, z } = newton::solve(function, hint, trials).ok()?;
+    match surface.subs(x, y).near(&curve.subs(z)) {
+        true => Some(((x, y), z)),
+        false => None,
+    }
 }
 
 /// Creates the surface division
@@ -224,19 +265,17 @@ where
                     + pt10.to_vec() * p * (1.0 - q)
                     + pt11.to_vec() * p * q,
             );
-            let far = p0.distance2(pt) > tol * tol;
-
-            /*
-            let ptu0 = surface.subs(u[0], v0);
-            let ptu1 = surface.subs(u[1], v0);
-            let ptv0 = surface.subs(u0, v[0]);
-            let ptv1 = surface.subs(u0, v[1]);
-            let ptu = ptu0 + (ptu1 - ptu0) * p;
-            let ptv = ptv0 + (ptv1 - ptv0) * q;
-            */
-
-            *ub = *ub || far;
-            *vb = *vb || far;
+            if p0.distance2(pt) > tol * tol {
+                let delu = pt00.midpoint(pt01).distance(p0) + pt10.midpoint(pt11).distance(p0);
+                let delv = pt00.midpoint(pt10).distance(p0) + pt01.midpoint(pt11).distance(p0);
+                if delu > delv * 2.0 {
+                    *ub = true;
+                } else if delv > delu * 2.0 {
+                    *vb = true;
+                } else {
+                    (*ub, *vb) = (true, true);
+                }
+            }
         }
     }
 

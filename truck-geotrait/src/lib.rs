@@ -35,4 +35,12 @@ pub use traits::*;
 /// Algorithms for curves and surfaces.
 pub mod algo;
 #[cfg(feature = "derive")]
-pub use truck_geoderive::*;
+pub use truck_derivers::{
+    BoundedCurve, BoundedSurface, Cut, Invertible, ParameterDivision1D, ParameterDivision2D,
+    ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameterD1,
+    SearchNearestParameterD2, SearchParameterD1, SearchParameterD2, SelfSameGeometry,
+    TransformedM3, TransformedM4,
+};
+#[cfg(feature = "polynomial")]
+/// Implementation sample using polynomials as an example
+pub mod polynomial;

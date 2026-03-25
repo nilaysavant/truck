@@ -16,6 +16,8 @@ impl<C: ParametricCurve> ParametricCurve for TrimmedCurve<C> {
     type Point = C::Point;
     type Vector = C::Vector;
     #[inline(always)]
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector { self.curve.der_n(n, t) }
+    #[inline(always)]
     fn subs(&self, t: f64) -> Self::Point { self.curve.subs(t) }
     #[inline(always)]
     fn der(&self, t: f64) -> Self::Vector { self.curve.der(t) }
@@ -30,6 +32,14 @@ impl<C: ParametricCurve> ParametricCurve for TrimmedCurve<C> {
 }
 
 impl<C: ParametricCurve> BoundedCurve for TrimmedCurve<C> {}
+
+impl<C: ParametricCurve> Cut for TrimmedCurve<C> {
+    fn cut(&mut self, t: f64) -> Self {
+        let (t0, t1) = self.range;
+        self.range = (t0, t);
+        Self::new(self.curve.clone(), (t, t1))
+    }
+}
 
 impl<C: SearchNearestParameter<D1>> SearchNearestParameter<D1> for TrimmedCurve<C> {
     type Point = C::Point;

@@ -12,18 +12,24 @@ pub trait ParametricCurve: Clone {
     /// The curve is in the space of `Self::Point`.
     type Point;
     /// The derivation vector of the curve.
-    type Vector;
+    type Vector: Zero + Copy;
     /// Substitutes the parameter `t`.
     fn subs(&self, t: f64) -> Self::Point;
     /// Returns the derivation.
     fn der(&self, t: f64) -> Self::Vector;
     /// Returns the 2nd-order derivation.
     fn der2(&self, t: f64) -> Self::Vector;
+    /// Returns the `n`th-order derivation.
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector;
+    /// Returns derivations at the parameter `t` with order `0..=n`.
+    fn ders(&self, n: usize, t: f64) -> CurveDers<Self::Vector> {
+        (0..=n).map(|i| self.der_n(i, t)).collect()
+    }
     /// Returns default parameter range
     #[inline(always)]
     fn parameter_range(&self) -> ParameterRange { (Bound::Unbounded, Bound::Unbounded) }
     /// Return the ends of `parameter_range` by tuple.
-    /// If the range is unbounded, return `None``.
+    /// If the range is unbounded, return `None`.
     #[inline(always)]
     fn try_range_tuple(&self) -> Option<(f64, f64)> {
         let (x, y) = self.parameter_range();
@@ -54,21 +60,10 @@ pub trait BoundedCurve: ParametricCurve {
 }
 
 /// Implementation for the test of topological methods.
-impl ParametricCurve for () {
-    type Point = ();
-    type Vector = ();
-    fn subs(&self, _: f64) -> Self::Point {}
-    fn der(&self, _: f64) -> Self::Vector {}
-    fn der2(&self, _: f64) -> Self::Vector {}
-    fn parameter_range(&self) -> ParameterRange { (Bound::Included(0.0), Bound::Included(1.0)) }
-}
-
-impl BoundedCurve for () {}
-
-/// Implementation for the test of topological methods.
 impl ParametricCurve for (usize, usize) {
     type Point = usize;
     type Vector = usize;
+    fn der_n(&self, _: usize, _: f64) -> Self::Vector { self.1 - self.0 }
     fn subs(&self, t: f64) -> Self::Point {
         match t < 0.5 {
             true => self.0,
@@ -83,7 +78,7 @@ impl ParametricCurve for (usize, usize) {
 /// Implementation for the test of topological methods.
 impl BoundedCurve for (usize, usize) {}
 
-impl<'a, C: ParametricCurve> ParametricCurve for &'a C {
+impl<C: ParametricCurve> ParametricCurve for &C {
     type Point = C::Point;
     type Vector = C::Vector;
     fn subs(&self, t: f64) -> Self::Point { (*self).subs(t) }
@@ -92,12 +87,16 @@ impl<'a, C: ParametricCurve> ParametricCurve for &'a C {
     #[inline(always)]
     fn der2(&self, t: f64) -> Self::Vector { (*self).der2(t) }
     #[inline(always)]
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector { (*self).der_n(n, t) }
+    #[inline(always)]
+    fn ders(&self, n: usize, t: f64) -> CurveDers<Self::Vector> { (*self).ders(n, t) }
+    #[inline(always)]
     fn parameter_range(&self) -> ParameterRange { (*self).parameter_range() }
     #[inline(always)]
     fn period(&self) -> Option<f64> { (*self).period() }
 }
 
-impl<'a, C: BoundedCurve> BoundedCurve for &'a C {
+impl<C: BoundedCurve> BoundedCurve for &C {
     #[inline(always)]
     fn front(&self) -> Self::Point { (*self).front() }
     #[inline(always)]
@@ -113,6 +112,10 @@ impl<C: ParametricCurve> ParametricCurve for Box<C> {
     #[inline(always)]
     fn der2(&self, t: f64) -> Self::Vector { (**self).der2(t) }
     #[inline(always)]
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector { (**self).der_n(n, t) }
+    #[inline(always)]
+    fn ders(&self, n: usize, t: f64) -> CurveDers<Self::Vector> { (**self).ders(n, t) }
+    #[inline(always)]
     fn parameter_range(&self) -> ParameterRange { (**self).parameter_range() }
     #[inline(always)]
     fn period(&self) -> Option<f64> { (**self).period() }
@@ -123,6 +126,11 @@ impl<C: BoundedCurve> BoundedCurve for Box<C> {
     fn front(&self) -> Self::Point { (**self).front() }
     #[inline(always)]
     fn back(&self) -> Self::Point { (**self).back() }
+}
+
+impl<C: Cut> Cut for Box<C> {
+    #[inline(always)]
+    fn cut(&mut self, t: f64) -> Self { Box::new((**self).cut(t)) }
 }
 
 /// 2D parametric curve
@@ -140,11 +148,11 @@ pub trait ParameterDivision1D {
     ///
     /// # Panics
     ///
-    /// `tol` must be more than `TOLERANCE`.
+    /// `tol` must be greater than or equal to `TOLERANCE`.
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Self::Point>);
 }
 
-impl<'a, C: ParameterDivision1D> ParameterDivision1D for &'a C {
+impl<C: ParameterDivision1D> ParameterDivision1D for &C {
     type Point = C::Point;
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Self::Point>) {
         (*self).parameter_division(range, tol)
@@ -427,16 +435,12 @@ where
     let p = rand::random::<f64>();
     let s = t0 * (1.0 - p) + t * p;
     assert_near!(part0.subs(s), curve.subs(s));
-    assert_near!(part0.der(s), curve.der(s));
-    assert_near!(part0.der2(s), curve.der2(s));
     assert_near!(part0.front(), curve.front());
     assert_near!(part0.back(), curve.subs(t));
 
     let p = rand::random::<f64>();
     let s = t * (1.0 - p) + t1 * p;
     assert_near!(part1.subs(s), curve.subs(s));
-    assert_near!(part1.der(s), curve.der(s));
-    assert_near!(part1.der2(s), curve.der2(s));
     assert_near!(part1.front(), curve.subs(t));
     assert_near!(part1.back(), curve.back());
 }

@@ -10,22 +10,36 @@ impl ParametricCurve for UnitHyperbola<Point2> {
     type Point = Point2;
     type Vector = Vector2;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point2::new(f64::cosh(t), f64::sinh(t)) }
+    fn der_n(&self, n: usize, t: f64) -> Vector2 {
+        match n % 2 {
+            0 => Vector2::new(f64::cosh(t), f64::sinh(t)),
+            _ => Vector2::new(f64::sinh(t), f64::cosh(t)),
+        }
+    }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector2::new(f64::sinh(t), f64::cosh(t)) }
+    fn subs(&self, t: f64) -> Self::Point { Point2::from_vec(self.der_n(0, t)) }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector2::new(f64::cosh(t), f64::sinh(t)) }
+    fn der(&self, t: f64) -> Self::Vector { self.der_n(1, t) }
+    #[inline]
+    fn der2(&self, t: f64) -> Self::Vector { self.der_n(2, t) }
 }
 
 impl ParametricCurve for UnitHyperbola<Point3> {
     type Point = Point3;
     type Vector = Vector3;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point3::new(f64::cosh(t), f64::sinh(t), 0.0) }
+    fn der_n(&self, n: usize, t: f64) -> Vector3 {
+        match n % 2 {
+            0 => Vector3::new(f64::cosh(t), f64::sinh(t), 0.0),
+            _ => Vector3::new(f64::sinh(t), f64::cosh(t), 0.0),
+        }
+    }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector3::new(f64::sinh(t), f64::cosh(t), 0.0) }
+    fn subs(&self, t: f64) -> Self::Point { Point3::from_vec(self.der_n(0, t)) }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector3::new(f64::cosh(t), f64::sinh(t), 0.0) }
+    fn der(&self, t: f64) -> Self::Vector { self.der_n(1, t) }
+    #[inline]
+    fn der2(&self, t: f64) -> Self::Vector { self.der_n(2, t) }
 }
 
 impl<P> ParameterDivision1D for UnitHyperbola<P>
@@ -102,24 +116,4 @@ impl SearchParameter<D1> for UnitHyperbola<Point3> {
             false => None,
         }
     }
-}
-
-#[test]
-fn snp_test() {
-    let curve = UnitHyperbola::<Point2>::new();
-    let p = curve.subs(2.0);
-    let q = p + Vector2::new(-p.x, p.y);
-    let t = curve.search_nearest_parameter(q, None, 0).unwrap();
-    assert_near!(t, 2.0);
-}
-
-#[test]
-fn sp_test() {
-    let curve = UnitHyperbola::<Point2>::new();
-    let t = 100.0 * rand::random::<f64>() - 50.0;
-    let p = curve.subs(t);
-    assert_near!(curve.search_parameter(p, None, 0).unwrap(), t);
-
-    let q = Point2::new(-1.0, 0.0);
-    assert!(curve.search_parameter(q, None, 0).is_none());
 }

@@ -116,7 +116,7 @@ impl Rendered for PolygonInstance {
             false => (&self.shaders.fragment_module, self.shaders.fragment_entry),
         };
         let cull_mode = match self.state.backface_culling {
-            true => Some(wgpu::Face::Back),
+            true => Some(Face::Back),
             false => None,
         };
         let blend = match self.state.material.alpha_blend {
@@ -127,7 +127,7 @@ impl Rendered for PolygonInstance {
             true => Some(DepthStencilState {
                 format: TextureFormat::Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_compare: CompareFunction::Less,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -138,9 +138,9 @@ impl Rendered for PolygonInstance {
             layout: Some(layout),
             vertex: VertexState {
                 module: &self.shaders.vertex_module,
-                entry_point: self.shaders.vertex_entry,
+                entry_point: Some(self.shaders.vertex_entry),
                 buffers: &[VertexBufferLayout {
-                    array_stride: std::mem::size_of::<AttrVertex>() as BufferAddress,
+                    array_stride: size_of::<AttrVertex>() as BufferAddress,
                     step_mode: VertexStepMode::Vertex,
                     attributes: &[
                         VertexAttribute {
@@ -160,15 +160,17 @@ impl Rendered for PolygonInstance {
                         },
                     ],
                 }],
+                compilation_options: Default::default(),
             },
             fragment: Some(FragmentState {
                 module: fragment_module,
-                entry_point: fragment_entry,
+                entry_point: Some(fragment_entry),
                 targets: &[Some(ColorTargetState {
                     format: scene_desc.render_texture.format,
                     blend,
                     write_mask: ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
             primitive: PrimitiveState {
                 topology: PrimitiveTopology::TriangleList,
@@ -185,6 +187,7 @@ impl Rendered for PolygonInstance {
             },
             label: None,
             multiview: None,
+            cache: None,
         });
         Arc::new(pipeline)
     }

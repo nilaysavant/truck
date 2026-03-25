@@ -1,4 +1,4 @@
-//! Mesh algorighms, include tessellations of the shape.
+//! Mesh algorigthms, include tessellations of the shape.
 
 #![cfg_attr(not(debug_assertions), deny(warnings))]
 #![deny(clippy::all, rust_2018_idioms)]
@@ -21,7 +21,7 @@ pub mod rexport_polymesh {
 }
 use truck_polymesh::{StandardVertex as Vertex, *};
 
-/// polygon mesh analizers, including
+/// polygon mesh analyzers, including
 ///
 /// - determines topological properties: connectivity, boundary extraction, or shell conditions (closed or oriented)
 /// - detects collisions between two meshes and extracts interference lines

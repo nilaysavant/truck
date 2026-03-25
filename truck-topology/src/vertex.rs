@@ -21,7 +21,7 @@ impl<P> Vertex<P> {
     /// Creates `len` distinct vertices and return them by vector.
     /// # Examples
     /// ```
-    /// use truck_topology::Vertex;
+    /// use truck_topology::*;
     /// let v = Vertex::news(&[(), (), ()]);
     /// assert_eq!(v.len(), 3);
     /// assert_ne!(v[0], v[2]);
@@ -172,7 +172,7 @@ impl<P> Hash for Vertex<P> {
     fn hash<H: Hasher>(&self, state: &mut H) { std::ptr::hash(Arc::as_ptr(&self.point), state); }
 }
 
-impl<'a, P: Debug> Debug for DebugDisplay<'a, Vertex<P>, VertexDisplayFormat> {
+impl<P: Debug> Debug for DebugDisplay<'_, Vertex<P>, VertexDisplayFormat> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.format {
             VertexDisplayFormat::Full => f

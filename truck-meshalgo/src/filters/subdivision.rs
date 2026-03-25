@@ -10,6 +10,7 @@ pub trait Subdivision {
     /// Confirm:
     /// - All faces are triangles.
     /// - `self.shell_condition()` is `Oriented` or `Closed` before use.
+    ///
     /// This method does NOT check these conditions.
     fn loop_subdivision(&mut self) -> &mut Self;
 }
@@ -104,6 +105,7 @@ fn add_vertex_edge(
 
 #[derive(Clone, Copy, Debug)]
 enum VertexBoundaryCondition {
+    #[allow(dead_code)]
     Corner(usize, usize),
     Boundary(usize, usize),
     Inner,

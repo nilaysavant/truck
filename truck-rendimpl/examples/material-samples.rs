@@ -35,12 +35,12 @@ impl App for MyApp {
         let sample_count = 4;
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
-                camera: Camera::perspective_camera(
-                    Matrix4::from_translation(camera_dist * Vector3::unit_z()),
-                    Rad(PI / 4.0),
-                    0.1,
-                    100.0,
-                ),
+                camera: Camera {
+                    matrix: Matrix4::from_translation(camera_dist * Vector3::unit_z()),
+                    method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+                    near_clip: 0.1,
+                    far_clip: 100.0,
+                },
                 lights: vec![
                     Light {
                         position: Point3::new(-a, -a, b),
@@ -79,7 +79,7 @@ impl App for MyApp {
         let v = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
         let e = builder::tsweep(&v, Vector3::unit_x());
         let f = builder::tsweep(&e, Vector3::unit_y());
-        let cube = builder::tsweep(&f, Vector3::unit_z());
+        let cube: Solid = builder::tsweep(&f, Vector3::unit_z());
         let mesh = cube.triangulation(0.01).to_polygon();
         let instance: PolygonInstance = scene
             .instance_creator()

@@ -260,8 +260,8 @@ impl<P, C> Wire<P, C> {
     /// let edge3 = Edge::new(&v[3], &v[1], ());
     /// let edge4 = Edge::new(&v[3], &v[0], ());
     ///
-    /// let wire0 = Wire::from_iter(vec![&edge0, &edge1, &edge2, &edge3]);
-    /// let wire1 = Wire::from(vec![edge0, edge1, edge2, edge4]);
+    /// let wire0 = wire![&edge0, &edge1, &edge2, &edge3];
+    /// let wire1 = wire![edge0, edge1, edge2, edge4];
     ///
     /// assert!(!wire0.is_simple());
     /// assert!(wire1.is_simple());
@@ -391,7 +391,13 @@ impl<P, C> Wire<P, C> {
         KV: FnMut(&'a Edge<P, C>) -> Option<Edge<Q, D>>,
     {
         self.edge_iter()
-            .map(|edge| Some(edge_map.entry_or_insert(edge).as_ref()?.absolute_clone()))
+            .map(|edge| {
+                let new_edge = edge_map.entry_or_insert(edge).as_ref()?;
+                match edge.orientation() {
+                    true => Some(new_edge.clone()),
+                    false => Some(new_edge.inverse()),
+                }
+            })
             .collect()
     }
 
@@ -432,6 +438,7 @@ impl<P, C> Wire<P, C> {
             })
             .collect()
     }
+
     /// Returns a new wire whose curves are mapped by `curve_mapping` and
     /// whose points are mapped by `point_mapping`.
     /// # Examples
@@ -575,8 +582,8 @@ where
     }
 }
 
-impl<T, P, C> From<T> for Wire<P, C>
-where T: Into<VecDeque<Edge<P, C>>>
+impl<P, C, T> From<T> for Wire<P, C>
+where VecDeque<Edge<P, C>>: From<T>
 {
     #[inline(always)]
     fn from(edge_list: T) -> Wire<P, C> {
@@ -693,7 +700,7 @@ pub struct VertexIter<'a, P, C> {
     cyclic: bool,
 }
 
-impl<'a, P, C> Iterator for VertexIter<'a, P, C> {
+impl<P, C> Iterator for VertexIter<'_, P, C> {
     type Item = Vertex<P>;
 
     fn next(&mut self) -> Option<Vertex<P>> {
@@ -733,7 +740,7 @@ impl<'a, P, C> Iterator for VertexIter<'a, P, C> {
     }
 }
 
-impl<'a, P, C> std::iter::FusedIterator for VertexIter<'a, P, C> {}
+impl<P, C> std::iter::FusedIterator for VertexIter<'_, P, C> {}
 
 impl<P, C> Extend<Edge<P, C>> for Wire<P, C> {
     fn extend<T: IntoIterator<Item = Edge<P, C>>>(&mut self, iter: T) {
@@ -741,6 +748,11 @@ impl<P, C> Extend<Edge<P, C>> for Wire<P, C> {
             self.push_back(edge);
         }
     }
+}
+
+impl<P, C> AsRef<VecDeque<Edge<P, C>>> for Wire<P, C> {
+    #[inline(always)]
+    fn as_ref(&self) -> &VecDeque<Edge<P, C>> { &self.edge_list }
 }
 
 impl<P, C> std::ops::Deref for Wire<P, C> {
@@ -752,6 +764,11 @@ impl<P, C> std::ops::Deref for Wire<P, C> {
 impl<P, C> std::ops::DerefMut for Wire<P, C> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.edge_list }
+}
+
+impl<P, C> std::borrow::Borrow<VecDeque<Edge<P, C>>> for Wire<P, C> {
+    #[inline(always)]
+    fn borrow(&self) -> &VecDeque<Edge<P, C>> { &self.edge_list }
 }
 
 impl<P, C> Clone for Wire<P, C> {
@@ -779,7 +796,7 @@ impl<P, C> Default for Wire<P, C> {
     }
 }
 
-impl<'a, P: Debug, C: Debug> Debug for DebugDisplay<'a, Wire<P, C>, WireDisplayFormat> {
+impl<P: Debug, C: Debug> Debug for DebugDisplay<'_, Wire<P, C>, WireDisplayFormat> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.format {
             WireDisplayFormat::EdgesListTuple { edge_format } => f

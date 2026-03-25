@@ -1,23 +1,34 @@
-#![allow(missing_docs)]
+#![allow(missing_docs, unused_qualifications)]
+
+/// re-export [`ruststep`](https://docs.rs/ruststep/latest/ruststep/)
+pub use ruststep;
 
 use ruststep::{
     ast::{DataSection, EntityInstance, Name, Parameter, SubSuperRecord},
-    error::Result,
     primitive::Logical,
     tables::{EntityTable, IntoOwned, PlaceHolder},
     Holder,
 };
 use serde::{Deserialize, Serialize};
+use std::result::Result;
 use std::{collections::HashMap, f64::consts::PI};
+use truck_assembly::assy::*;
 use truck_geometry::prelude as truck;
 use truck_topology::compress::*;
 
-/// type alias
-pub mod alias;
-use alias::*;
+pub mod convert;
+/// Geometry parsed from STEP that can be handled by truck
+pub mod step_geometry;
+use step_geometry::*;
 
+/// the exchange structure corresponds to a graph in STEP file
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Table {
+    // representation
+    pub representation: HashMap<u64, RepresentationHolder>,
+    pub representation_item: HashMap<u64, RepresentationItemHolder>,
+    pub representation_context: HashMap<u64, RepresentationContextHolder>,
+
     // primitives
     pub cartesian_point: HashMap<u64, CartesianPointHolder>,
     pub direction: HashMap<u64, DirectionHolder>,
@@ -37,6 +48,8 @@ pub struct Table {
     pub rational_b_spline_curve: HashMap<u64, RationalBSplineCurveHolder>,
     pub circle: HashMap<u64, CircleHolder>,
     pub ellipse: HashMap<u64, EllipseHolder>,
+    pub hyperbola: HashMap<u64, HyperbolaHolder>,
+    pub parabola: HashMap<u64, ParabolaHolder>,
     pub pcurve: HashMap<u64, PcurveHolder>,
     pub surface_curve: HashMap<u64, SurfaceCurveHolder>,
 
@@ -64,6 +77,26 @@ pub struct Table {
     pub oriented_face: HashMap<u64, OrientedFaceHolder>,
     pub shell: HashMap<u64, ShellHolder>,
     pub oriented_shell: HashMap<u64, OrientedShellHolder>,
+    pub shell_based_surface_model: HashMap<u64, ShellBasedSurfaceModelHolder>,
+    pub manifold_solid_brep: HashMap<u64, ManifoldSolidBrepHolder>,
+
+    // assembly
+    pub application_context: HashMap<u64, ApplicationContextHolder>,
+    pub product_context: HashMap<u64, ProductContextHolder>,
+    pub product: HashMap<u64, ProductHolder>,
+    pub product_definition_formation: HashMap<u64, ProductDefinitionFormationHolder>,
+    pub product_definition_context: HashMap<u64, ProductDefinitionContextHolder>,
+    pub product_definition: HashMap<u64, ProductDefinitionHolder>,
+    pub product_definition_shape: HashMap<u64, ProductDefinitionShapeHolder>,
+    pub shape_definition_representation: HashMap<u64, ShapeDefinitionRepresentationHolder>,
+    pub shape_representation: HashMap<u64, ShapeRepresentationHolder>,
+    pub context_dependent_shape_representation:
+        HashMap<u64, ContextDependentShapeRepresentationHolder>,
+    pub shape_representation_relationship: HashMap<u64, ShapeRepresentationRelationshipHolder>,
+    pub shape_representation_relationship_with_transformation:
+        HashMap<u64, ShapeRepresentationRelationshipWithTransformationHolder>,
+    pub next_assembly_usage_occurrence: HashMap<u64, NextAssemblyUsageOccurrenceHolder>,
+    pub item_defined_transformation: HashMap<u64, ItemDefinedTransformationHolder>,
 
     // others
     pub definitional_representation: HashMap<u64, DefinitionalRepresentationHolder>,
@@ -73,7 +106,7 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn push_instance(&mut self, instance: &EntityInstance) -> Result<()> {
+    pub fn push_instance(&mut self, instance: &EntityInstance) -> ruststep::error::Result<()> {
         match instance {
             EntityInstance::Simple { id, record } => match record.name.as_str() {
                 "CARTESIAN_POINT" => {
@@ -131,6 +164,13 @@ impl Table {
                 }
                 "ELLIPSE" => {
                     self.ellipse.insert(*id, Deserialize::deserialize(record)?);
+                }
+                "HYPERBOLA" => {
+                    self.hyperbola
+                        .insert(*id, Deserialize::deserialize(record)?);
+                }
+                "PARABOLA" => {
+                    self.parabola.insert(*id, Deserialize::deserialize(record)?);
                 }
                 "PCURVE" => {
                     self.pcurve.insert(*id, Deserialize::deserialize(record)?);
@@ -279,6 +319,28 @@ impl Table {
                         }
                     }
                 }
+                "SHELL_BASED_SURFACE_MODEL" => {
+                    self.shell_based_surface_model
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "MANIFOLD_SOLID_BREP" => {
+                    if let Parameter::List(params) = &record.parameter {
+                        if params.len() == 2 {
+                            self.manifold_solid_brep.insert(
+                                *id,
+                                ManifoldSolidBrepHolder {
+                                    label: Deserialize::deserialize(&params[0])?,
+                                    outer: Deserialize::deserialize(&params[1])?,
+                                    voids: Vec::new(),
+                                },
+                            );
+                        }
+                    }
+                }
+                "BREP_WITH_VOIDS" => {
+                    self.manifold_solid_brep
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
                 "DEFINITIONAL_REPRESENTATION" => {
                     if let Parameter::List(params) = &record.parameter {
                         if params.len() == 3 {
@@ -287,7 +349,7 @@ impl Table {
                                 DefinitionalRepresentationHolder {
                                     label: Deserialize::deserialize(&params[0])?,
                                     representation_item: Deserialize::deserialize(&params[1])?,
-                                    contex_of_items: match &params[2] {
+                                    context_of_items: match &params[2] {
                                         Parameter::Ref(x) => PlaceHolder::Ref(x.clone()),
                                         _ => PlaceHolder::Owned(DummyHolder {
                                             record: format!("{:?}", params[2]),
@@ -298,6 +360,76 @@ impl Table {
                             );
                         }
                     }
+                }
+                "APPLICATION_CONTEXT" => {
+                    self.application_context
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "PRODUCT_CONTEXT" => {
+                    self.product_context
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "PRODUCT" => {
+                    self.product
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "PRODUCT_DEFINITION_FORMATION" => {
+                    self.product_definition_formation
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE" => {
+                    if let Parameter::List(params) = &record.parameter {
+                        if params.len() >= 3 {
+                            self.product_definition_formation.insert(
+                                *id,
+                                ProductDefinitionFormationHolder {
+                                    id: Deserialize::deserialize(&params[0])?,
+                                    description: Deserialize::deserialize(&params[1])?,
+                                    of_product: Deserialize::deserialize(&params[2])?,
+                                },
+                            );
+                        }
+                    }
+                }
+                "PRODUCT_DEFINITION_CONTEXT" => {
+                    self.product_definition_context
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "PRODUCT_DEFINITION" => {
+                    self.product_definition
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "PRODUCT_DEFINITION_SHAPE" => {
+                    self.product_definition_shape
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "SHAPE_DEFINITION_REPRESENTATION" => {
+                    self.shape_definition_representation
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "SHAPE_REPRESENTATION" => {
+                    self.shape_representation
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "ADVANCED_BREP_SHAPE_REPRESENTATION" => {
+                    self.shape_representation
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION" => {
+                    self.context_dependent_shape_representation
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "SHAPE_REPRESENTATION_RELATIONSHIP" => {
+                    self.shape_representation_relationship
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "NEXT_ASSEMBLY_USAGE_OCCURRENCE" => {
+                    self.next_assembly_usage_occurrence
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
+                }
+                "ITEM_DEFINED_TRANSFORMATION" => {
+                    self.item_defined_transformation
+                        .insert(*id, Deserialize::deserialize(&record.parameter)?);
                 }
                 _ => {
                     self.dummy.insert(
@@ -584,6 +716,45 @@ impl Table {
                             );
                         }
                     }
+                } else if records.len() == 3 {
+                    match (
+                        records[0].name.as_str(),
+                        &records[0].parameter,
+                        records[1].name.as_str(),
+                        &records[1].parameter,
+                        records[2].name.as_str(),
+                        &records[2].parameter,
+                    ) {
+                        (
+                            "REPRESENTATION_RELATIONSHIP",
+                            Parameter::List(rr_parameter),
+                            "REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION",
+                            Parameter::List(transformation),
+                            "SHAPE_REPRESENTATION_RELATIONSHIP",
+                            _,
+                        ) => {
+                            let entity = ShapeRepresentationRelationshipWithTransformationHolder {
+                                name: Deserialize::deserialize(&rr_parameter[0])?,
+                                description: Deserialize::deserialize(&rr_parameter[1])?,
+                                rep_1: Deserialize::deserialize(&rr_parameter[2])?,
+                                rep_2: Deserialize::deserialize(&rr_parameter[3])?,
+                                transformation_operator: Deserialize::deserialize(
+                                    &transformation[0],
+                                )?,
+                            };
+                            self.shape_representation_relationship_with_transformation
+                                .insert(*id, entity);
+                        }
+                        _ => {
+                            self.dummy.insert(
+                                *id,
+                                DummyHolder {
+                                    record: format!("{records:?}"),
+                                    is_simple: false,
+                                },
+                            );
+                        }
+                    }
                 } else {
                     self.dummy.insert(
                         *id,
@@ -619,6 +790,7 @@ impl<'a> FromIterator<&'a EntityInstance> for Table {
     }
 }
 
+/// Undefined structures are parsed into this.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = dummy)]
@@ -626,6 +798,37 @@ impl<'a> FromIterator<&'a EntityInstance> for Table {
 pub struct Dummy {
     pub record: String,
     pub is_simple: bool,
+}
+
+/// Many geometric and topological elements are contained within this entity's child classes.
+/// Since it is essentially an `Any` type, one must manually map the reference according to the context.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = representation_item)]
+#[holder(generate_deserialize)]
+pub struct RepresentationItem {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = representation_context)]
+#[holder(generate_deserialize)]
+pub struct RepresentationContext {
+    pub context_identifier: String,
+    pub context_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = representation)]
+#[holder(generate_deserialize)]
+pub struct Representation {
+    pub name: String,
+    #[holder(use_place_holder)]
+    pub items: Vec<RepresentationItem>,
+    #[holder(use_place_holder)]
+    pub context_of_items: Vec<RepresentationContext>,
 }
 
 /// `cartesian_point`
@@ -733,6 +936,7 @@ impl From<&Placement> for Point3 {
     fn from(p: &Placement) -> Self { Self::from(&p.location) }
 }
 
+/// `axis1_placement`
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = axis1_placement)]
@@ -754,6 +958,7 @@ impl Axis1Placement {
     }
 }
 
+/// `axis2_placement`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -765,9 +970,9 @@ pub enum Axis2Placement {
 }
 
 impl TryFrom<&Axis2Placement> for Matrix3 {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(axis: &Axis2Placement) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(axis: &Axis2Placement) -> Result<Self, StepConvertingError> {
         use Axis2Placement::*;
         match axis {
             Axis2Placement2d(axis) => Ok(Matrix3::from(axis)),
@@ -776,9 +981,9 @@ impl TryFrom<&Axis2Placement> for Matrix3 {
     }
 }
 impl TryFrom<&Axis2Placement> for Matrix4 {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(axis: &Axis2Placement) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(axis: &Axis2Placement) -> Result<Self, StepConvertingError> {
         use Axis2Placement::*;
         match axis {
             Axis2Placement2d(_) => Err("This is not a 3D axis placement.".into()),
@@ -787,6 +992,7 @@ impl TryFrom<&Axis2Placement> for Matrix4 {
     }
 }
 
+/// `axis2_placement_2d`
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = axis2_placement_2d)]
@@ -812,6 +1018,7 @@ impl From<&Axis2Placement2d> for Matrix3 {
     }
 }
 
+/// `axis2_placement_3d`
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = axis2_placement_3d)]
@@ -849,6 +1056,7 @@ impl From<&Axis2Placement3d> for Matrix4 {
     }
 }
 
+/// `curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -866,9 +1074,9 @@ pub enum CurveAny {
 }
 
 impl TryFrom<&CurveAny> for Curve2D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &CurveAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(curve: &CurveAny) -> Result<Self, Self::Error> {
         use CurveAny::*;
         Ok(match curve {
             Line(line) => Self::Line(line.as_ref().into()),
@@ -881,9 +1089,9 @@ impl TryFrom<&CurveAny> for Curve2D {
 }
 
 impl TryFrom<&CurveAny> for Curve3D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &CurveAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(curve: &CurveAny) -> Result<Self, Self::Error> {
         use CurveAny::*;
         Ok(match curve {
             Line(line) => Self::Line(line.as_ref().into()),
@@ -895,6 +1103,7 @@ impl TryFrom<&CurveAny> for Curve3D {
     }
 }
 
+/// `line`
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = line)]
@@ -919,6 +1128,7 @@ where
     }
 }
 
+/// `bounded_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -930,9 +1140,9 @@ pub enum BoundedCurveAny {
 }
 
 impl TryFrom<&BoundedCurveAny> for Curve2D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &BoundedCurveAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &BoundedCurveAny) -> Result<Self, Self::Error> {
         use BoundedCurveAny::*;
         Ok(match value {
             Polyline(x) => Self::Polyline(x.as_ref().into()),
@@ -942,9 +1152,9 @@ impl TryFrom<&BoundedCurveAny> for Curve2D {
 }
 
 impl TryFrom<&BoundedCurveAny> for Curve3D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &BoundedCurveAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &BoundedCurveAny) -> Result<Self, Self::Error> {
         use BoundedCurveAny::*;
         Ok(match value {
             Polyline(x) => Self::Polyline(x.as_ref().into()),
@@ -953,6 +1163,7 @@ impl TryFrom<&BoundedCurveAny> for Curve3D {
     }
 }
 
+/// `polyline`
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = polyline)]
@@ -967,6 +1178,7 @@ impl<'a, P: From<&'a CartesianPoint>> From<&'a Polyline> for PolylineCurve<P> {
     fn from(poly: &'a Polyline) -> Self { Self(poly.points.iter().map(|pt| P::from(pt)).collect()) }
 }
 
+/// `b_spline_curve_form`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BSplineCurveForm {
     PolylineForm,
@@ -977,6 +1189,7 @@ pub enum BSplineCurveForm {
     Unspecified,
 }
 
+/// `knot_type`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KnotType {
     UniformKnots,
@@ -985,6 +1198,7 @@ pub enum KnotType {
     PiecewiseBezierKnots,
 }
 
+/// `b_spline_curve_with_knots`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = b_spline_curve_with_knots)]
@@ -1002,9 +1216,9 @@ pub struct BSplineCurveWithKnots {
     pub knot_spec: KnotType,
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BSplineCurveWithKnots> for BSplineCurve<P> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &BSplineCurveWithKnots) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(curve: &BSplineCurveWithKnots) -> Result<Self, StepConvertingError> {
         let knots = curve.knots.clone();
         let multi = curve
             .knot_multiplicities
@@ -1017,6 +1231,7 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BSplineCurveWithKnots> for BS
     }
 }
 
+/// `bezier_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = bezier_curve)]
@@ -1031,9 +1246,9 @@ pub struct BezierCurve {
     pub self_intersect: Logical,
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BezierCurve> for BSplineCurve<P> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &BezierCurve) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(curve: &BezierCurve) -> Result<Self, StepConvertingError> {
         let degree = curve.degree as usize;
         let knots = KnotVec::bezier_knot(degree);
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
@@ -1041,6 +1256,7 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&BezierCurve> for BSplineCurve
     }
 }
 
+/// `quasi_uniform_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = quasi_uniform_curve)]
@@ -1055,9 +1271,9 @@ pub struct QuasiUniformCurve {
     pub self_intersect: Logical,
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&QuasiUniformCurve> for BSplineCurve<P> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &QuasiUniformCurve) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(curve: &QuasiUniformCurve) -> Result<Self, StepConvertingError> {
         let knots = quasi_uniform_knots(curve.control_points_list.len(), curve.degree as usize);
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
         Ok(Self::try_new(knots, ctrpts)?)
@@ -1071,6 +1287,7 @@ fn quasi_uniform_knots(num_ctrl: usize, degree: usize) -> KnotVec {
     knots
 }
 
+/// `uniform_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = uniform_curve)]
@@ -1085,9 +1302,9 @@ pub struct UniformCurve {
     pub self_intersect: Logical,
 }
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&UniformCurve> for BSplineCurve<P> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &UniformCurve) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(curve: &UniformCurve) -> Result<Self, StepConvertingError> {
         let knots = uniform_knots(curve.control_points_list.len(), curve.degree as usize)?;
         let ctrpts = curve.control_points_list.iter().map(Into::into).collect();
         Ok(Self::try_new(knots, ctrpts)?)
@@ -1102,6 +1319,8 @@ fn uniform_knots(num_ctrl: usize, degree: usize) -> truck::Result<KnotVec> {
     )
 }
 
+/// Entity that does not exist in AP042.
+/// Curve before rationalization of [`RationalBSplineCurve`] defined by a complex entity
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1117,9 +1336,9 @@ pub enum NonRationalBSplineCurve {
 }
 
 impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&NonRationalBSplineCurve> for BSplineCurve<P> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &NonRationalBSplineCurve) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(curve: &NonRationalBSplineCurve) -> Result<Self, StepConvertingError> {
         use NonRationalBSplineCurve::*;
         match curve {
             BSplineCurveWithKnots(x) => x.try_into(),
@@ -1130,6 +1349,8 @@ impl<P: for<'a> From<&'a CartesianPoint>> TryFrom<&NonRationalBSplineCurve> for 
     }
 }
 
+/// `rational_b_spline_curve` as complex entity
+///
 /// This struct is an ad hoc implementation that differs from the definition by EXPRESS:
 /// in AP042, rationalized curves are defined as complex entities,
 /// but here the curves before rationalization are held as internal variables.
@@ -1144,12 +1365,12 @@ pub struct RationalBSplineCurve {
 }
 impl<V> TryFrom<&RationalBSplineCurve> for NurbsCurve<V>
 where
-    V: Homogeneous<f64>,
+    V: Homogeneous<Scalar = f64>,
     V::Point: for<'a> From<&'a CartesianPoint>,
 {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(curve: &RationalBSplineCurve) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(curve: &RationalBSplineCurve) -> Result<Self, StepConvertingError> {
         Ok(Self::try_from_bspline_and_weights(
             BSplineCurve::try_from(&curve.non_rational_b_spline_curve)?,
             curve.weights_data.clone(),
@@ -1157,6 +1378,7 @@ where
     }
 }
 
+/// b_spline_curve
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1168,9 +1390,9 @@ pub enum BSplineCurveAny {
 }
 
 impl TryFrom<&BSplineCurveAny> for Curve2D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &BSplineCurveAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &BSplineCurveAny) -> Result<Self, Self::Error> {
         use BSplineCurveAny::*;
         Ok(match value {
             NonRationalBSplineCurve(bsp) => Self::BSplineCurve(bsp.as_ref().try_into()?),
@@ -1180,9 +1402,9 @@ impl TryFrom<&BSplineCurveAny> for Curve2D {
 }
 
 impl TryFrom<&BSplineCurveAny> for Curve3D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &BSplineCurveAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &BSplineCurveAny) -> Result<Self, Self::Error> {
         use BSplineCurveAny::*;
         Ok(match value {
             NonRationalBSplineCurve(bsp) => Self::BSplineCurve(bsp.as_ref().try_into()?),
@@ -1191,6 +1413,7 @@ impl TryFrom<&BSplineCurveAny> for Curve3D {
     }
 }
 
+/// `conic`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1199,30 +1422,39 @@ pub enum Conic {
     Circle(Circle),
     #[holder(use_place_holder)]
     Ellipse(Ellipse),
+    #[holder(use_place_holder)]
+    Hyperbola(Hyperbola),
+    #[holder(use_place_holder)]
+    Parabola(Parabola),
 }
 
 impl TryFrom<&Conic> for Conic2D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &Conic) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(value: &Conic) -> Result<Self, Self::Error> {
         Ok(match value {
             Conic::Circle(value) => Conic2D::Ellipse(value.try_into()?),
             Conic::Ellipse(value) => Conic2D::Ellipse(value.try_into()?),
+            Conic::Hyperbola(value) => Conic2D::Hyperbola(value.try_into()?),
+            Conic::Parabola(value) => Conic2D::Parabola(value.try_into()?),
         })
     }
 }
 
 impl TryFrom<&Conic> for Conic3D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &Conic) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(value: &Conic) -> Result<Self, Self::Error> {
         Ok(match value {
             Conic::Circle(value) => Conic3D::Ellipse(value.try_into()?),
             Conic::Ellipse(value) => Conic3D::Ellipse(value.try_into()?),
+            Conic::Hyperbola(value) => Conic3D::Hyperbola(value.try_into()?),
+            Conic::Parabola(value) => Conic3D::Parabola(value.try_into()?),
         })
     }
 }
 
+/// `circle`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = circle)]
@@ -1234,12 +1466,11 @@ pub struct Circle {
     pub radius: f64,
 }
 
-impl TryFrom<&Circle> for alias::Ellipse<Point2, Matrix3> {
-    type Error = ExpressParseError;
+impl TryFrom<&Circle> for step_geometry::Ellipse<Point2, Matrix3> {
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(circle: &Circle) -> std::result::Result<Self, Self::Error> {
-        let radius: f64 = circle.radius;
-        let transform = Matrix3::try_from(&circle.position)? * Matrix3::from_scale(radius);
+    fn try_from(circle: &Circle) -> Result<Self, Self::Error> {
+        let transform = Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius);
         Ok(
             Processor::new(truck::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
@@ -1247,12 +1478,11 @@ impl TryFrom<&Circle> for alias::Ellipse<Point2, Matrix3> {
     }
 }
 
-impl TryFrom<&Circle> for alias::Ellipse<Point3, Matrix4> {
-    type Error = ExpressParseError;
+impl TryFrom<&Circle> for step_geometry::Ellipse<Point3, Matrix4> {
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(circle: &Circle) -> std::result::Result<Self, Self::Error> {
-        let radius: f64 = circle.radius;
-        let transform = Matrix4::try_from(&circle.position)? * Matrix4::from_scale(radius);
+    fn try_from(circle: &Circle) -> Result<Self, Self::Error> {
+        let transform = Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius);
         Ok(
             Processor::new(truck::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
@@ -1260,6 +1490,7 @@ impl TryFrom<&Circle> for alias::Ellipse<Point3, Matrix4> {
     }
 }
 
+/// `ellipse`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = ellipse)]
@@ -1272,10 +1503,10 @@ pub struct Ellipse {
     pub semi_axis_2: f64,
 }
 
-impl TryFrom<&Ellipse> for alias::Ellipse<Point2, Matrix3> {
-    type Error = ExpressParseError;
+impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point2, Matrix3> {
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(ellipse: &Ellipse) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(ellipse: &Ellipse) -> Result<Self, Self::Error> {
         let (r0, r1) = (ellipse.semi_axis_1, ellipse.semi_axis_2);
         let transform =
             Matrix3::try_from(&ellipse.position)? * Matrix3::from_nonuniform_scale(r0, r1);
@@ -1286,10 +1517,10 @@ impl TryFrom<&Ellipse> for alias::Ellipse<Point2, Matrix3> {
     }
 }
 
-impl TryFrom<&Ellipse> for alias::Ellipse<Point3, Matrix4> {
-    type Error = ExpressParseError;
+impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point3, Matrix4> {
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(ellipse: &Ellipse) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(ellipse: &Ellipse) -> Result<Self, Self::Error> {
         let (r0, r1) = (ellipse.semi_axis_1, ellipse.semi_axis_2);
         let transform = Matrix4::try_from(&ellipse.position)?
             * Matrix4::from_nonuniform_scale(r0, r1, f64::min(r0, r1));
@@ -1300,6 +1531,86 @@ impl TryFrom<&Ellipse> for alias::Ellipse<Point3, Matrix4> {
     }
 }
 
+/// `hyperbola`
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = hyperbola)]
+#[holder(generate_deserialize)]
+pub struct Hyperbola {
+    pub label: String,
+    #[holder(use_place_holder)]
+    pub position: Axis2Placement,
+    pub semi_axis: f64,
+    pub semi_imag_axis: f64,
+}
+
+impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point2, Matrix3> {
+    type Error = StepConvertingError;
+    #[inline(always)]
+    fn try_from(hyperbola: &Hyperbola) -> Result<Self, Self::Error> {
+        let (r0, r1) = (hyperbola.semi_axis, hyperbola.semi_imag_axis);
+        let transform =
+            Matrix3::try_from(&hyperbola.position)? * Matrix3::from_nonuniform_scale(r0, r1);
+        Ok(
+            Processor::new(truck::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
+                .transformed(transform),
+        )
+    }
+}
+
+impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point3, Matrix4> {
+    type Error = StepConvertingError;
+    #[inline(always)]
+    fn try_from(hyperbola: &Hyperbola) -> Result<Self, Self::Error> {
+        let (r0, r1) = (hyperbola.semi_axis, hyperbola.semi_imag_axis);
+        let transform = Matrix4::try_from(&hyperbola.position)?
+            * Matrix4::from_nonuniform_scale(r0, r1, f64::min(r0, r1));
+        Ok(
+            Processor::new(truck::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
+                .transformed(transform),
+        )
+    }
+}
+
+/// `parabola`
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = parabola)]
+#[holder(generate_deserialize)]
+pub struct Parabola {
+    pub label: String,
+    #[holder(use_place_holder)]
+    pub position: Axis2Placement,
+    pub focal_dist: f64,
+}
+
+impl TryFrom<&Parabola> for step_geometry::Parabola<Point2, Matrix3> {
+    type Error = StepConvertingError;
+    #[inline(always)]
+    fn try_from(parabola: &Parabola) -> Result<Self, Self::Error> {
+        let transform =
+            Matrix3::try_from(&parabola.position)? * Matrix3::from_scale(parabola.focal_dist);
+        Ok(
+            Processor::new(truck::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
+                .transformed(transform),
+        )
+    }
+}
+
+impl TryFrom<&Parabola> for step_geometry::Parabola<Point3, Matrix4> {
+    type Error = StepConvertingError;
+    #[inline(always)]
+    fn try_from(parabola: &Parabola) -> Result<Self, Self::Error> {
+        let transform =
+            Matrix4::try_from(&parabola.position)? * Matrix4::from_scale(parabola.focal_dist);
+        Ok(
+            Processor::new(truck::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
+                .transformed(transform),
+        )
+    }
+}
+
+/// `definitional_representation`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = definitional_representation)]
@@ -1309,9 +1620,10 @@ pub struct DefinitionalRepresentation {
     #[holder(use_place_holder)]
     representation_item: Vec<CurveAny>,
     #[holder(use_place_holder)]
-    contex_of_items: Dummy,
+    context_of_items: Dummy,
 }
 
+/// `pcurve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = pcurve)]
@@ -1325,9 +1637,9 @@ pub struct Pcurve {
 }
 
 impl TryFrom<&Pcurve> for PCurve {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &Pcurve) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Pcurve) -> Result<Self, Self::Error> {
         let surface: Surface = (&value.basis_surface).try_into()?;
         let curve: Curve2D = value
             .reference_to_curve
@@ -1335,10 +1647,14 @@ impl TryFrom<&Pcurve> for PCurve {
             .first()
             .ok_or("no representation item")?
             .try_into()?;
-        Ok(alias::PCurve::new(Box::new(curve), Box::new(surface)))
+        Ok(step_geometry::PCurve::new(
+            Box::new(curve),
+            Box::new(surface),
+        ))
     }
 }
 
+/// `pcurve_or_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1349,6 +1665,7 @@ pub enum PcurveOrSurface {
     Surface(Box<SurfaceAny>),
 }
 
+/// `preferred_surface_representation`
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PreferredSurfaceCurveRepresentation {
     Curve3D,
@@ -1366,6 +1683,7 @@ fn deserialize_pscr() {
     assert!(matches!(x, PreferredSurfaceCurveRepresentation::PcurveS2));
 }
 
+/// `surface_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = surface_curve)]
@@ -1380,9 +1698,9 @@ pub struct SurfaceCurve {
 }
 
 impl TryFrom<&SurfaceCurve> for Curve3D {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &SurfaceCurve) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &SurfaceCurve) -> Result<Self, Self::Error> {
         use PreferredSurfaceCurveRepresentation as PSCR;
         match &value.master_representation {
             PSCR::Curve3D => Ok((&value.curve_3d).try_into()?),
@@ -1404,6 +1722,7 @@ impl TryFrom<&SurfaceCurve> for Curve3D {
     }
 }
 
+/// `surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1417,18 +1736,19 @@ pub enum SurfaceAny {
 }
 
 impl TryFrom<&SurfaceAny> for Surface {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(x: &SurfaceAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(x: &SurfaceAny) -> Result<Self, Self::Error> {
         use SurfaceAny::*;
         Ok(match x {
-            ElementarySurface(x) => Self::ElementarySurface(Box::new(x.as_ref().into())),
+            ElementarySurface(x) => Self::ElementarySurface(x.as_ref().into()),
             BSplineSurface(x) => x.as_ref().try_into()?,
-            SweptSurface(x) => Self::SweptCurve(Box::new(x.as_ref().try_into()?)),
+            SweptSurface(x) => Self::SweptCurve(x.as_ref().try_into()?),
         })
     }
 }
 
+/// `elementary_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1459,6 +1779,7 @@ impl From<&ElementarySurfaceAny> for ElementarySurface {
     }
 }
 
+/// `plane`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = plane)]
@@ -1480,6 +1801,7 @@ impl From<&Plane> for truck::Plane {
     }
 }
 
+/// `spherical_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = spherical_surface)]
@@ -1491,7 +1813,7 @@ pub struct SphericalSurface {
     radius: f64,
 }
 
-impl From<&SphericalSurface> for alias::SphericalSurface {
+impl From<&SphericalSurface> for step_geometry::SphericalSurface {
     #[inline(always)]
     fn from(ss: &SphericalSurface) -> Self {
         let mat = Matrix4::from(&ss.position);
@@ -1500,6 +1822,7 @@ impl From<&SphericalSurface> for alias::SphericalSurface {
     }
 }
 
+/// `cylindrical_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = cylindrical_surface)]
@@ -1511,7 +1834,7 @@ pub struct CylindricalSurface {
     radius: f64,
 }
 
-impl From<&CylindricalSurface> for alias::CylindricalSurface {
+impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
     #[inline(always)]
     fn from(cs: &CylindricalSurface) -> Self {
         let mat = Matrix4::from(&cs.position);
@@ -1526,6 +1849,7 @@ impl From<&CylindricalSurface> for alias::CylindricalSurface {
     }
 }
 
+/// `toroidal_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = toroidal_surface)]
@@ -1538,7 +1862,7 @@ pub struct ToroidalSurface {
     minor_radius: f64,
 }
 
-impl From<&ToroidalSurface> for alias::ToroidalSurface {
+impl From<&ToroidalSurface> for step_geometry::ToroidalSurface {
     #[inline(always)]
     fn from(
         ToroidalSurface {
@@ -1554,6 +1878,7 @@ impl From<&ToroidalSurface> for alias::ToroidalSurface {
     }
 }
 
+/// `conical_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = conical_surface)]
@@ -1566,7 +1891,7 @@ pub struct ConicalSurface {
     semi_angle: f64,
 }
 
-impl From<&ConicalSurface> for alias::ConicalSurface {
+impl From<&ConicalSurface> for step_geometry::ConicalSurface {
     fn from(
         ConicalSurface {
             position,
@@ -1587,6 +1912,7 @@ impl From<&ConicalSurface> for alias::ConicalSurface {
     }
 }
 
+/// `b_spline_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1598,17 +1924,18 @@ pub enum BSplineSurfaceAny {
 }
 
 impl TryFrom<&BSplineSurfaceAny> for Surface {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &BSplineSurfaceAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &BSplineSurfaceAny) -> Result<Self, Self::Error> {
         use BSplineSurfaceAny::*;
         Ok(match value {
-            NonRationalBSplineSurface(bsp) => Surface::BSplineSurface(Box::new(bsp.try_into()?)),
-            RationalBSplineSurface(bsp) => Surface::NurbsSurface(Box::new(bsp.try_into()?)),
+            NonRationalBSplineSurface(bsp) => Surface::BSplineSurface(bsp.try_into()?),
+            RationalBSplineSurface(bsp) => Surface::NurbsSurface(bsp.try_into()?),
         })
     }
 }
 
+/// `b_spline_surface_form`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BSplineSurfaceForm {
     PlaneSurf,
@@ -1624,6 +1951,7 @@ pub enum BSplineSurfaceForm {
     Unspecified,
 }
 
+/// `b_spline_surface_with_knots`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = b_spline_surface_with_knots)]
@@ -1646,9 +1974,9 @@ pub struct BSplineSurfaceWithKnots {
 }
 
 impl TryFrom<&BSplineSurfaceWithKnots> for BSplineSurface<Point3> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(surface: &BSplineSurfaceWithKnots) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(surface: &BSplineSurfaceWithKnots) -> Result<Self, StepConvertingError> {
         let uknots = surface.u_knots.to_vec();
         let umulti = surface
             .u_multiplicities
@@ -1672,6 +2000,7 @@ impl TryFrom<&BSplineSurfaceWithKnots> for BSplineSurface<Point3> {
     }
 }
 
+/// `uniform_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = uniform_surface)]
@@ -1689,9 +2018,9 @@ pub struct UniformSurface {
 }
 
 impl TryFrom<&UniformSurface> for BSplineSurface<Point3> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(surface: &UniformSurface) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(surface: &UniformSurface) -> Result<Self, StepConvertingError> {
         let uknots = uniform_knots(surface.control_points_list.len(), surface.u_degree as usize)?;
         let first = surface
             .control_points_list
@@ -1707,6 +2036,7 @@ impl TryFrom<&UniformSurface> for BSplineSurface<Point3> {
     }
 }
 
+/// `quasi_uniform_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = quasi_uniform_surface)]
@@ -1724,9 +2054,9 @@ pub struct QuasiUniformSurface {
 }
 
 impl TryFrom<&QuasiUniformSurface> for BSplineSurface<Point3> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(surface: &QuasiUniformSurface) -> std::result::Result<Self, ExpressParseError> {
+    fn try_from(surface: &QuasiUniformSurface) -> Result<Self, StepConvertingError> {
         let uknots =
             quasi_uniform_knots(surface.control_points_list.len(), surface.u_degree as usize);
         let first = surface
@@ -1743,6 +2073,7 @@ impl TryFrom<&QuasiUniformSurface> for BSplineSurface<Point3> {
     }
 }
 
+/// `bezier_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = bezier_surface)]
@@ -1773,6 +2104,8 @@ impl From<&BezierSurface> for BSplineSurface<Point3> {
     }
 }
 
+/// Entity that does not exist in AP042.
+/// Surface before rationalization of [`RationalBSplineSurface`] defined by a complex entity
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1788,9 +2121,9 @@ pub enum NonRationalBSplineSurface {
 }
 
 impl TryFrom<&NonRationalBSplineSurface> for BSplineSurface<Point3> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &NonRationalBSplineSurface) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &NonRationalBSplineSurface) -> Result<Self, Self::Error> {
         use NonRationalBSplineSurface::*;
         match value {
             BSplineSurfaceWithKnots(x) => x.as_ref().try_into(),
@@ -1801,6 +2134,11 @@ impl TryFrom<&NonRationalBSplineSurface> for BSplineSurface<Point3> {
     }
 }
 
+/// `rational_b_spline_surface` as complex entity
+///
+/// This struct is an ad hoc implementation that differs from the definition by EXPRESS:
+/// in AP042, rationalized curves are defined as complex entities,
+/// but here the surfaces before rationalization are held as internal variables.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = rational_b_spline_surface)]
@@ -1812,14 +2150,14 @@ pub struct RationalBSplineSurface {
 }
 
 impl TryFrom<&RationalBSplineSurface> for NurbsSurface<Vector4> {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
     fn try_from(
         RationalBSplineSurface {
             non_rational_b_spline_surface,
             weights_data,
         }: &RationalBSplineSurface,
-    ) -> std::result::Result<Self, Self::Error> {
+    ) -> Result<Self, Self::Error> {
         let surface: BSplineSurface<Point3> = non_rational_b_spline_surface.try_into()?;
         Ok(Self::try_from_bspline_and_weights(
             surface,
@@ -1828,6 +2166,7 @@ impl TryFrom<&RationalBSplineSurface> for NurbsSurface<Vector4> {
     }
 }
 
+/// `swept_surface`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1839,9 +2178,9 @@ pub enum SweptSurfaceAny {
 }
 
 impl TryFrom<&SweptSurfaceAny> for SweptCurve {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(value: &SweptSurfaceAny) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &SweptSurfaceAny) -> Result<Self, Self::Error> {
         use SweptSurfaceAny::*;
         Ok(match value {
             SurfaceOfLinearExtrusion(x) => SweptCurve::ExtrudedCurve(x.as_ref().try_into()?),
@@ -1850,6 +2189,7 @@ impl TryFrom<&SweptSurfaceAny> for SweptCurve {
     }
 }
 
+/// `surface_of_linear_extrusion`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = surface_of_linear_extrusion)]
@@ -1863,15 +2203,16 @@ pub struct SurfaceOfLinearExtrusion {
 }
 
 impl TryFrom<&SurfaceOfLinearExtrusion> for StepExtrudedCurve {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(sr: &SurfaceOfLinearExtrusion) -> std::result::Result<Self, Self::Error> {
+    fn try_from(sr: &SurfaceOfLinearExtrusion) -> Result<Self, Self::Error> {
         let curve = Curve3D::try_from(&sr.swept_curve)?;
         let vector = Vector3::from(&sr.extrusion_axis);
         Ok(ExtrudedCurve::by_extrusion(curve, vector))
     }
 }
 
+/// `surface_of_revolution`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = surface_of_revolution)]
@@ -1885,9 +2226,9 @@ pub struct SurfaceOfRevolution {
 }
 
 impl TryFrom<&SurfaceOfRevolution> for StepRevolutedCurve {
-    type Error = ExpressParseError;
+    type Error = StepConvertingError;
     #[inline(always)]
-    fn try_from(sr: &SurfaceOfRevolution) -> std::result::Result<Self, Self::Error> {
+    fn try_from(sr: &SurfaceOfRevolution) -> Result<Self, Self::Error> {
         let curve = Curve3D::try_from(&sr.swept_curve)?;
         let origin = Point3::from(&sr.axis_position.location);
         let axis = sr.axis_position.direction().normalize();
@@ -1897,6 +2238,7 @@ impl TryFrom<&SurfaceOfRevolution> for StepRevolutedCurve {
     }
 }
 
+/// `vertex_point`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = vertex_point)]
@@ -1907,6 +2249,7 @@ pub struct VertexPoint {
     pub vertex_geometry: CartesianPoint,
 }
 
+/// `edge`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -1917,6 +2260,7 @@ pub enum EdgeAny {
     OrientedEdge(OrientedEdge),
 }
 
+/// `edge_curve`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = edge_curve)]
@@ -1933,7 +2277,7 @@ pub struct EdgeCurve {
 }
 
 impl EdgeCurve {
-    pub fn parse_curve2d(&self) -> std::result::Result<Curve2D, ExpressParseError> {
+    pub fn parse_curve2d(&self) -> Result<Curve2D, StepConvertingError> {
         let p = Point2::from(&self.edge_start.vertex_geometry);
         let q = Point2::from(&self.edge_end.vertex_geometry);
         let (p, q) = match self.same_sense {
@@ -1947,7 +2291,7 @@ impl EdgeCurve {
         p: Point2,
         q: Point2,
         same_sense: bool,
-    ) -> std::result::Result<Curve2D, ExpressParseError> {
+    ) -> Result<Curve2D, StepConvertingError> {
         let mut curve = match curve {
             CurveAny::Line(line) => {
                 let line = truck::Line::<Point2>::from(line.as_ref());
@@ -2003,6 +2347,49 @@ impl EdgeCurve {
                     ellipse.transform_by(mat);
                     Curve2D::Conic(Conic2D::Ellipse(ellipse))
                 }
+                Conic::Hyperbola(hyperbola) => {
+                    let mat = Matrix3::try_from(&hyperbola.position)?
+                        * Matrix3::from_nonuniform_scale(
+                            hyperbola.semi_axis,
+                            hyperbola.semi_imag_axis,
+                        );
+                    let inv_mat = mat
+                        .invert()
+                        .ok_or_else(|| "Failed to convert Hyperbola".to_string())?;
+                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                    let (u, v) = (
+                        UnitHyperbola::<Point2>::new()
+                            .search_nearest_parameter(p, None, 0)
+                            .ok_or_else(|| "the point is not on hyperbola".to_string())?,
+                        UnitHyperbola::<Point2>::new()
+                            .search_nearest_parameter(q, None, 0)
+                            .ok_or_else(|| "the point is not on hyparbola".to_string())?,
+                    );
+                    let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
+                    let mut hyperbola = Processor::new(unit);
+                    hyperbola.transform_by(mat);
+                    Curve2D::Conic(Conic2D::Hyperbola(hyperbola))
+                }
+                Conic::Parabola(parabola) => {
+                    let mat = Matrix3::try_from(&parabola.position)?
+                        * Matrix3::from_scale(parabola.focal_dist);
+                    let inv_mat = mat
+                        .invert()
+                        .ok_or_else(|| "Failed to convert Parabola".to_string())?;
+                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                    let (u, v) = (
+                        UnitHyperbola::<Point2>::new()
+                            .search_nearest_parameter(p, None, 0)
+                            .ok_or_else(|| "the point is not on parabola".to_string())?,
+                        UnitHyperbola::<Point2>::new()
+                            .search_nearest_parameter(q, None, 0)
+                            .ok_or_else(|| "the point is not on parabola".to_string())?,
+                    );
+                    let unit = TrimmedCurve::new(UnitHyperbola::<Point2>::new(), (u, v));
+                    let mut parabola = Processor::new(unit);
+                    parabola.transform_by(mat);
+                    Curve2D::Conic(Conic2D::Hyperbola(parabola))
+                }
             },
             CurveAny::Pcurve(_) => return Err("Pcurves cannot be parsed to 2D curves.".into()),
             CurveAny::SurfaceCurve(_) => {
@@ -2014,7 +2401,7 @@ impl EdgeCurve {
         }
         Ok(curve)
     }
-    pub fn parse_curve3d(&self) -> std::result::Result<Curve3D, ExpressParseError> {
+    pub fn parse_curve3d(&self) -> Result<Curve3D, StepConvertingError> {
         let p = Point3::from(&self.edge_start.vertex_geometry);
         let q = Point3::from(&self.edge_end.vertex_geometry);
         let (p, q) = match self.same_sense {
@@ -2028,7 +2415,7 @@ impl EdgeCurve {
         p: Point3,
         q: Point3,
         same_sense: bool,
-    ) -> std::result::Result<Curve3D, ExpressParseError> {
+    ) -> Result<Curve3D, StepConvertingError> {
         let mut curve = match curve {
             CurveAny::Line(_) => Curve3D::Line(Line(p, q)),
             CurveAny::BoundedCurve(b) => b.as_ref().try_into()?,
@@ -2082,6 +2469,53 @@ impl EdgeCurve {
                     let mut ellipse = Processor::new(circle);
                     ellipse.transform_by(mat);
                     Curve3D::Conic(Conic3D::Ellipse(ellipse))
+                }
+                Conic::Hyperbola(hyperbola) => {
+                    let mat = Matrix4::try_from(&hyperbola.position)?
+                        * Matrix4::from_nonuniform_scale(
+                            hyperbola.semi_axis,
+                            hyperbola.semi_imag_axis,
+                            f64::min(hyperbola.semi_axis, hyperbola.semi_imag_axis),
+                        );
+                    let inv_mat = mat
+                        .invert()
+                        .ok_or_else(|| "Failed to convert Circle".to_string())?;
+                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                    let (u, mut v) = (
+                        UnitHyperbola::<Point3>::new()
+                            .search_nearest_parameter(p, None, 0)
+                            .ok_or_else(|| "the point is not on circle".to_string())?,
+                        UnitHyperbola::<Point3>::new()
+                            .search_nearest_parameter(q, None, 0)
+                            .ok_or_else(|| "the point is not on circle".to_string())?,
+                    );
+                    if v <= u + TOLERANCE {
+                        v += 2.0 * PI;
+                    }
+                    let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
+                    let mut hyperbola = Processor::new(unit);
+                    hyperbola.transform_by(mat);
+                    Curve3D::Conic(Conic3D::Hyperbola(hyperbola))
+                }
+                Conic::Parabola(parabola) => {
+                    let mat = Matrix4::try_from(&parabola.position)?
+                        * Matrix4::from_scale(parabola.focal_dist);
+                    let inv_mat = mat
+                        .invert()
+                        .ok_or_else(|| "Failed to convert Parabola".to_string())?;
+                    let (p, q) = (inv_mat.transform_point(p), inv_mat.transform_point(q));
+                    let (u, v) = (
+                        UnitHyperbola::<Point3>::new()
+                            .search_nearest_parameter(p, None, 0)
+                            .ok_or_else(|| "the point is not on parabola".to_string())?,
+                        UnitHyperbola::<Point3>::new()
+                            .search_nearest_parameter(q, None, 0)
+                            .ok_or_else(|| "the point is not on parabola".to_string())?,
+                    );
+                    let unit = TrimmedCurve::new(UnitHyperbola::<Point3>::new(), (u, v));
+                    let mut parabola = Processor::new(unit);
+                    parabola.transform_by(mat);
+                    Curve3D::Conic(Conic3D::Hyperbola(parabola))
                 }
             },
             CurveAny::Pcurve(c) => {
@@ -2142,12 +2576,14 @@ impl EdgeCurve {
     }
 }
 
+/// `oriented_edge`
+///
+/// `oriented_edge` has duplicated information.
+/// These are not included here because they are essentially omitted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = oriented_edge)]
 #[holder(generate_deserialize)]
-/// `ORIENTED_EDGE` has duplicated information.
-/// These are not included here because they are essentially omitted.
 pub struct OrientedEdge {
     pub label: String,
     #[holder(use_place_holder)]
@@ -2172,6 +2608,7 @@ impl OrientedEdgeHolder {
     }
 }
 
+/// `edge_loop`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = edge_loop)]
@@ -2182,6 +2619,7 @@ pub struct EdgeLoop {
     pub edge_list: Vec<EdgeAny>,
 }
 
+/// `face_bound`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = face_bound)]
@@ -2205,6 +2643,7 @@ impl FaceBoundHolder {
     }
 }
 
+/// `face`
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(generate_deserialize)]
@@ -2215,11 +2654,13 @@ pub enum FaceAny {
     OrientedFace(OrientedFace),
 }
 
+/// `face_surface`
+///
+/// `advanced_face` is also parsed to this struct.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = face_surface)]
 #[holder(generate_deserialize)]
-/// `ADVANCED_FACE` is also parsed to this struct.
 pub struct FaceSurface {
     pub label: String,
     #[holder(use_place_holder)]
@@ -2242,12 +2683,14 @@ impl FaceSurfaceHolder {
     }
 }
 
+/// `oriented_face`
+///
+/// `oriented_face` has duplicated information.
+/// These are not included here because they are essentially omitted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = oriented_face)]
 #[holder(generate_deserialize)]
-/// `ORIENTED_EDGE` has duplicated information.
-/// These are not included here because they are essentially omitted.
 pub struct OrientedFace {
     pub label: String,
     #[holder(use_place_holder)]
@@ -2265,12 +2708,14 @@ impl OrientedFaceHolder {
     }
 }
 
+/// `shell`
+///
+/// Includes `open_shell` and `closed_shell`.
+/// Since these differences are only informal propositions, the data structure does not distinguish between the two.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = shell)]
 #[holder(generate_deserialize)]
-/// Includes `OPEN_SHELL` and `CLOSED_SHELL`.
-/// Since these differences are only informal propositions, the data structure does not distinguish between the two.
 pub struct Shell {
     pub label: String,
     #[holder(use_place_holder)]
@@ -2301,12 +2746,14 @@ impl ShellHolder {
     }
 }
 
+/// `oriented_shell`
+///
+/// Includes `oriented_open_shell` and `oriented_closed_shell`.
+/// Since these differences are only informal propositions, the data structure does not distinguish between the two.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
 #[holder(table = Table)]
 #[holder(field = oriented_shell)]
 #[holder(generate_deserialize)]
-/// Includes `ORIENTED_OPEN_SHELL` and `ORIENTED_CLOSED_SHELL`.
-/// Since these differences are only informal propositions, the data structure does not distinguish between the two.
 pub struct OrientedShell {
     pub label: String,
     #[holder(use_place_holder)]
@@ -2314,195 +2761,230 @@ pub struct OrientedShell {
     pub orientation: bool,
 }
 
-impl Table {
-    fn place_holder_edge_any_to_index_and_edge_curve(
-        &self,
-        edge: &PlaceHolder<EdgeAnyHolder>,
-    ) -> Option<(u64, EdgeCurveHolder)> {
-        use PlaceHolder::Ref;
-        let Ref(Name::Entity(ref idx)) = edge else {
-            return None;
-        };
-        self.oriented_edge
-            .get(idx)
-            .and_then(|oriented_edge| {
-                Some((
-                    oriented_edge.edge_element_idx()?,
-                    oriented_edge.edge_element_holder(self)?,
-                ))
-            })
-            .or_else(|| {
-                self.edge_curve
-                    .get(idx)
-                    .map(|edge_curve| (*idx, edge_curve.clone()))
-            })
-    }
-    fn face_any_to_orientation_and_face(
-        &self,
-        face: Option<FaceAnyHolder>,
-    ) -> Option<(bool, FaceSurfaceHolder)> {
-        match face? {
-            FaceAnyHolder::FaceSurface(face) => Some((true, face)),
-            FaceAnyHolder::OrientedFace(oriented_face) => {
-                let face_element = oriented_face.face_element_holder(self)?;
-                Some((oriented_face.orientation, face_element))
-            }
-        }
-    }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(generate_deserialize)]
+pub enum ShellAny {
+    #[holder(use_place_holder)]
+    Shell(Shell),
+    #[holder(use_place_holder)]
+    OrientedShell(OrientedShell),
+}
 
-    fn shell_vertices(&self, shell: &ShellHolder) -> (Vec<Point3>, HashMap<u64, usize>) {
-        use PlaceHolder::Ref;
-        let mut vidx_map = HashMap::<u64, usize>::new();
-        let vertex_to_point = |v: PlaceHolder<VertexPointHolder>| {
-            if let Ref(Name::Entity(ref idx)) = v {
-                if vidx_map.get(idx).is_none() {
-                    let len = vidx_map.len();
-                    vidx_map.insert(*idx, len);
-                    let p = EntityTable::<VertexPointHolder>::get_owned(self, *idx)
-                        .map_err(|e| eprintln!("{e}"))
-                        .ok()?;
-                    return Some(Point3::from(&p.vertex_geometry));
-                }
-            }
-            None
-        };
-        let vertices: Vec<Point3> = shell
-            .cfs_faces_holder(self)
-            .filter_map(move |face| self.face_any_to_orientation_and_face(face))
-            .flat_map(move |(_, face)| face.bounds_holder(self))
-            .filter_map(move |bound| bound?.bound_holder(self))
-            .flat_map(move |bound| bound.edge_list)
-            .filter_map(move |edge| self.place_holder_edge_any_to_index_and_edge_curve(&edge))
-            .flat_map(move |(_, edge)| [edge.edge_start, edge.edge_end])
-            .filter_map(vertex_to_point)
-            .collect();
-        (vertices, vidx_map)
-    }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = shell_based_surface_model)]
+#[holder(generate_deserialize)]
+pub struct ShellBasedSurfaceModel {
+    pub label: String,
+    #[holder(use_place_holder)]
+    pub sbsm_boundary: Vec<ShellAny>,
+}
 
-    fn shell_edges(
-        &self,
-        shell: &ShellHolder,
-        vidx_map: &HashMap<u64, usize>,
-    ) -> (Vec<CompressedEdge<Curve3D>>, HashMap<u64, usize>) {
-        use PlaceHolder::Ref;
-        let mut eidx_map = HashMap::<u64, usize>::new();
-        let edge_curve_to_compressed_edge = |(idx, edge): (u64, EdgeCurveHolder)| {
-            if eidx_map.get(&idx).is_some() {
-                return None;
-            }
-            let len = eidx_map.len();
-            eidx_map.insert(idx, len);
-            let edge_curve = edge
-                .clone()
-                .into_owned(self)
-                .map_err(|e| eprintln!("{e}"))
-                .ok()?;
-            let curve = edge_curve
-                .parse_curve3d()
-                .map_err(|e| eprintln!("{e}"))
-                .ok()?;
-            let Ref(Name::Entity(front_idx)) = edge.edge_start else {
-                return None;
-            };
-            let Ref(Name::Entity(back_idx)) = edge.edge_end else {
-                return None;
-            };
-            Some(CompressedEdge {
-                vertices: (*vidx_map.get(&front_idx)?, *vidx_map.get(&back_idx)?),
-                curve,
-            })
-        };
-        let edges: Vec<CompressedEdge<Curve3D>> = shell
-            .cfs_faces_holder(self)
-            .filter_map(move |face| self.face_any_to_orientation_and_face(face))
-            .flat_map(move |(_, face)| face.bounds_holder(self))
-            .filter_map(move |bound| bound?.bound_holder(self))
-            .flat_map(move |bound| bound.edge_list)
-            .filter_map(move |edge| self.place_holder_edge_any_to_index_and_edge_curve(&edge))
-            .filter_map(edge_curve_to_compressed_edge)
-            .collect();
-        (edges, eidx_map)
-    }
-    fn face_bound_to_edges(
-        &self,
-        bound: FaceBoundHolder,
-        eidx_map: &HashMap<u64, usize>,
-    ) -> Option<Vec<CompressedEdgeIndex>> {
-        use PlaceHolder::Ref;
-        let ori = bound.orientation;
-        let bound = bound.bound_holder(self)?;
-        let mut edges: Vec<CompressedEdgeIndex> = bound
-            .edge_list
-            .into_iter()
-            .filter_map(|edge| {
-                let Ref(Name::Entity(ref idx)) = edge else {
-                    return None;
-                };
-                let edge_idx = if let Some(oriented_edge) = self.oriented_edge.get(idx) {
-                    CompressedEdgeIndex {
-                        index: *eidx_map.get(&oriented_edge.edge_element_idx()?)?,
-                        orientation: oriented_edge.orientation == ori,
-                    }
-                } else {
-                    CompressedEdgeIndex {
-                        index: *eidx_map.get(idx)?,
-                        orientation: ori,
-                    }
-                };
-                Some(edge_idx)
-            })
-            .collect();
-        if !ori {
-            edges.reverse();
-        }
-        Some(edges)
-    }
+/// Also serves as `brep_with_voids`
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = manifold_solid_brep)]
+#[holder(generate_deserialize)]
+pub struct ManifoldSolidBrep {
+    pub label: String,
+    #[holder(use_place_holder)]
+    pub outer: ShellAny,
+    #[holder(use_place_holder)]
+    pub voids: Vec<OrientedShell>,
+}
 
-    fn shell_faces(
-        &self,
-        shell: &ShellHolder,
-        eidx_map: &HashMap<u64, usize>,
-    ) -> Vec<CompressedFace<Surface>> {
-        shell
-            .cfs_faces_holder(self)
-            .filter_map(|face| self.face_any_to_orientation_and_face(face))
-            .filter_map(|(orientation, face)| {
-                let step_surface: SurfaceAny = face
-                    .face_geometry
-                    .clone()
-                    .into_owned(self)
-                    .map_err(|e| eprintln!("{e}"))
-                    .ok()?;
-                let mut surface = Surface::try_from(&step_surface)
-                    .map_err(|e| eprintln!("{e}"))
-                    .ok()?;
-                if !face.same_sense {
-                    surface.invert()
-                }
-                let boundaries: Vec<_> = face
-                    .bounds_holder(self)
-                    .into_iter()
-                    .filter_map(|bound| self.face_bound_to_edges(bound?, eidx_map))
-                    .collect();
-                Some(CompressedFace {
-                    surface,
-                    boundaries,
-                    orientation,
-                })
-            })
-            .collect()
-    }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = application_context)]
+#[holder(generate_deserialize)]
+pub struct ApplicationContext {
+    pub application: String,
+}
 
-    pub fn to_compressed_shell(
-        &self,
-        shell: &ShellHolder,
-    ) -> std::result::Result<CompressedShell<Point3, Curve3D, Surface>, ExpressParseError> {
-        let (vertices, vidx_map) = self.shell_vertices(shell);
-        let (edges, eidx_map) = self.shell_edges(shell, &vidx_map);
-        Ok(CompressedShell {
-            vertices,
-            edges,
-            faces: self.shell_faces(shell, &eidx_map),
-        })
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = product_context)]
+#[holder(generate_deserialize)]
+pub struct ProductContext {
+    pub name: String,
+    #[holder(use_place_holder)]
+    pub frame_of_reference: ApplicationContext,
+    pub discipline_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = product)]
+#[holder(generate_deserialize)]
+pub struct Product {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub frame_of_reference: Vec<ProductContext>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = product_definition_formation)]
+#[holder(generate_deserialize)]
+pub struct ProductDefinitionFormation {
+    pub id: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub of_product: Product,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = product_definition_context)]
+#[holder(generate_deserialize)]
+pub struct ProductDefinitionContext {
+    pub name: String,
+    #[holder(use_place_holder)]
+    pub frame_of_reference: ApplicationContext,
+    pub life_cycle_stage: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = product_definition)]
+#[holder(generate_deserialize)]
+pub struct ProductDefinition {
+    pub id: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub formation: ProductDefinitionFormation,
+    #[holder(use_place_holder)]
+    pub frame_of_reference: ProductDefinitionContext,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(generate_deserialize)]
+pub enum CharacterizedDefinition {
+    #[holder(use_place_holder)]
+    ProductDefinition(Box<ProductDefinition>),
+    #[holder(use_place_holder)]
+    ProductDefinitionShape(Box<ProductDefinitionShape>),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = product_definition_shape)]
+#[holder(generate_deserialize)]
+pub struct ProductDefinitionShape {
+    pub name: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub definition: CharacterizedDefinition,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = shape_representation)]
+#[holder(generate_deserialize)]
+pub struct ShapeRepresentation {
+    pub name: String,
+    #[holder(use_place_holder)]
+    pub items: Vec<RepresentationItem>,
+    #[holder(use_place_holder)]
+    pub context_of_items: RepresentationContext,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = context_dependent_shape_representation)]
+#[holder(generate_deserialize)]
+pub struct ContextDependentShapeRepresentation {
+    #[holder(use_place_holder)]
+    pub representation_relation: ShapeRepresentationRelationshipWithTransformation,
+    #[holder(use_place_holder)]
+    pub represented_product_relation: ProductDefinitionShape,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = shape_definition_representation)]
+#[holder(generate_deserialize)]
+pub struct ShapeDefinitionRepresentation {
+    #[holder(use_place_holder)]
+    pub definition: ProductDefinitionShape,
+    #[holder(use_place_holder)]
+    pub used_representation: ShapeRepresentation,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = shape_representation_relationship)]
+#[holder(generate_deserialize)]
+pub struct ShapeRepresentationRelationship {
+    pub name: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub rep_1: ShapeRepresentation,
+    #[holder(use_place_holder)]
+    pub rep_2: ShapeRepresentation,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = shape_representation_relationship_with_transformation)]
+#[holder(generate_deserialize)]
+pub struct ShapeRepresentationRelationshipWithTransformation {
+    pub name: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub rep_1: ShapeRepresentation,
+    #[holder(use_place_holder)]
+    pub rep_2: ShapeRepresentation,
+    #[holder(use_place_holder)]
+    pub transformation_operator: ItemDefinedTransformation,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = next_assembly_usage_occurrence)]
+#[holder(generate_deserialize)]
+pub struct NextAssemblyUsageOccurrence {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    #[holder(use_place_holder)]
+    pub relating_product_definition: ProductDefinition,
+    #[holder(use_place_holder)]
+    pub related_product_definition: ProductDefinition,
+    pub reference_designator: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Holder)]
+#[holder(table = Table)]
+#[holder(field = item_defined_transformation)]
+#[holder(generate_deserialize)]
+pub struct ItemDefinedTransformation {
+    name: String,
+    description: String,
+    #[holder(use_place_holder)]
+    transform_item_1: Axis2Placement,
+    #[holder(use_place_holder)]
+    transform_item_2: Axis2Placement,
+}
+
+impl TryFrom<&ItemDefinedTransformation> for Matrix3 {
+    type Error = StepConvertingError;
+    fn try_from(value: &ItemDefinedTransformation) -> Result<Self, Self::Error> {
+        let mat1: Self = (&value.transform_item_1).try_into()?;
+        let mat2: Self = (&value.transform_item_2).try_into()?;
+        Ok(mat2 * mat1.invert().unwrap())
+    }
+}
+
+impl TryFrom<&ItemDefinedTransformation> for Matrix4 {
+    type Error = StepConvertingError;
+    fn try_from(value: &ItemDefinedTransformation) -> Result<Self, Self::Error> {
+        let mat1: Self = (&value.transform_item_1).try_into()?;
+        let mat2: Self = (&value.transform_item_2).try_into()?;
+        Ok(mat2 * mat1.invert().unwrap())
     }
 }

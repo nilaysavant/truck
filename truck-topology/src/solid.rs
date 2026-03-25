@@ -215,15 +215,21 @@ impl<P, C, S> Solid<P, C, S> {
     }
 }
 
+impl<P: Clone, C: Clone, S: Clone> Solid<P, C, Option<S>> {
+    /// Returns the value with the Option removed if there is no `None` in the surfaces of the faces.
+    #[inline(always)]
+    pub fn collect_option(&self) -> Option<Solid<P, C, S>> {
+        self.try_mapped(|x| Some(x.clone()), |x| Some(x.clone()), Clone::clone)
+    }
+}
+
 impl<P, C, S> PartialEq for Solid<P, C, S> {
     fn eq(&self, other: &Self) -> bool { self.boundaries == other.boundaries }
 }
 
 impl<P, C, S> Eq for Solid<P, C, S> {}
 
-impl<'a, P: Debug, C: Debug, S: Debug> Debug
-    for DebugDisplay<'a, Solid<P, C, S>, SolidDisplayFormat>
-{
+impl<P: Debug, C: Debug, S: Debug> Debug for DebugDisplay<'_, Solid<P, C, S>, SolidDisplayFormat> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.format {
             SolidDisplayFormat::ShellsList { shell_format } => f
@@ -275,45 +281,25 @@ pub(super) fn cube() -> Solid<(), (), ()> {
         Edge::new(&v[7], &v[4], ()), // 11
     ];
 
-    let wire0 = Wire::from_iter(vec![&edge[0], &edge[1], &edge[2], &edge[3]]);
+    let wire0 = wire![&edge[0], &edge[1], &edge[2], &edge[3]];
     let face0 = Face::new(vec![wire0], ());
 
-    let wire1 = Wire::from_iter(vec![
-        &edge[4],
-        &edge[8],
-        &edge[5].inverse(),
-        &edge[0].inverse(),
-    ]);
+    let wire1 = wire![&edge[4], &edge[8], &edge[5].inverse(), &edge[0].inverse(),];
     let face1 = Face::new(vec![wire1], ());
 
-    let wire2 = Wire::from_iter(vec![
-        &edge[5],
-        &edge[9],
-        &edge[6].inverse(),
-        &edge[1].inverse(),
-    ]);
+    let wire2 = wire![&edge[5], &edge[9], &edge[6].inverse(), &edge[1].inverse(),];
     let face2 = Face::new(vec![wire2], ());
 
-    let wire3 = Wire::from_iter(vec![
-        &edge[6],
-        &edge[10],
-        &edge[7].inverse(),
-        &edge[2].inverse(),
-    ]);
+    let wire3 = wire![&edge[6], &edge[10], &edge[7].inverse(), &edge[2].inverse(),];
     let face3 = Face::new(vec![wire3], ());
-    let wire4 = Wire::from_iter(vec![
-        &edge[7],
-        &edge[11],
-        &edge[4].inverse(),
-        &edge[3].inverse(),
-    ]);
+    let wire4 = wire![&edge[7], &edge[11], &edge[4].inverse(), &edge[3].inverse(),];
     let face4 = Face::new(vec![wire4], ());
-    let wire5 = Wire::from_iter(vec![
+    let wire5 = wire![
         &edge[11].inverse(),
         &edge[10].inverse(),
         &edge[9].inverse(),
         &edge[8].inverse(),
-    ]);
+    ];
     let face5 = Face::new(vec![wire5], ());
 
     let mut shell = Shell::new();

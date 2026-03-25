@@ -16,7 +16,7 @@ pub enum Error {
     /// use truck_geometry::errors::Error;
     /// let mut knot_vec = KnotVec::from(vec![0.0, 0.0, 0.0, 0.0]);
     /// assert_eq!(knot_vec.try_normalize(), Err(Error::ZeroRange));
-    /// assert_eq!(knot_vec.try_bspline_basis_functions(1, 0.0), Err(Error::ZeroRange));
+    /// assert_eq!(knot_vec.try_bspline_basis_functions(1, 0, 0.0), Err(Error::ZeroRange));
     ///
     /// let ctrl_pts = vec![Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0)];
     /// assert!(matches!(BSplineCurve::try_new(knot_vec, ctrl_pts), Err(Error::ZeroRange)));
@@ -75,7 +75,7 @@ the front of the second knot vector: {1}")]
     /// // a knot vector with length = 4.
     /// let knot_vec = KnotVec::from(vec![0.0, 0.0, 1.0, 1.0]);
     /// assert!(matches!(
-    ///     knot_vec.try_bspline_basis_functions(5, 0.5),
+    ///     knot_vec.try_bspline_basis_functions(5, 0, 0.5),
     ///     Err(Error::TooLargeDegree(4, 5)),
     /// ));
     /// ```
@@ -169,6 +169,28 @@ the number of control points: {1}"
     /// ```
     #[error("The vector of control points and the one of weights have different length.")]
     DifferentLength,
+    /// Gaussian eliminaition is failed. Typically, this is because one has included multiple
+    /// parameters for which the B-spline basis functions take the same value.
+    /// # Examples
+    /// ```
+    /// use truck_geometry::prelude::*;
+    /// use truck_geometry::errors::Error;
+    ///
+    /// let knot_vec = KnotVec::uniform_knot(2, 2);
+    /// let parameter_points = [
+    ///     (0.1, Point3::new(1.0, 2.0, 3.0)),
+    ///     (0.8, Point3::new(4.0, -1.0, 10.0)),
+    ///     (0.8, Point3::new(-3.0, 5.0, 6.0)),
+    ///     (1.0, Point3::new(6.0, 2.0, 12.0)),
+    /// ];
+    ///
+    /// assert!(matches!(
+    ///     BSplineCurve::try_interpole(knot_vec, parameter_points),
+    ///     Err(Error::GaussianEliminationFailure),
+    /// ));
+    /// ```
+    #[error("Gaussian elimination is failed.")]
+    GaussianEliminationFailure,
 }
 
 #[test]

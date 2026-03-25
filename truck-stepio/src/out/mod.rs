@@ -1,8 +1,41 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
-use truck_topology::compress::{CompressedShell, CompressedSolid};
+use truck_topology::compress::*;
 
 use self::topology::PreStepModel;
+
+const ERR: Result = Err(std::fmt::Error);
+
+#[cfg(feature = "derive")]
+pub use truck_derivers::{DisplayByStep, StepLength};
+
+/// display boolean number to step file
+#[derive(Clone, Copy, Debug)]
+pub struct BooleanDisplay(pub bool);
+
+impl Display for BooleanDisplay {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self.0 {
+            true => f.write_str(".T."),
+            false => f.write_str(".F."),
+        }
+    }
+}
+
+/// display float number to step file
+#[derive(Clone, Copy, Debug)]
+pub struct FloatDisplay(pub f64);
+
+impl Display for FloatDisplay {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        let FloatDisplay(x) = *self;
+        if f64::abs(x) < 1.0e-2 && x != 0.0 {
+            f.write_fmt(format_args!("{x:.10E}"))
+        } else {
+            f.write_fmt(format_args!("{x:?}"))
+        }
+    }
+}
 
 /// display step slice
 /// # Examples
@@ -16,24 +49,20 @@ use self::topology::PreStepModel;
 #[derive(Clone, Debug)]
 pub struct SliceDisplay<'a, T>(pub &'a [T]);
 
-impl<'a> Display for SliceDisplay<'a, f64> {
+impl Display for SliceDisplay<'_, f64> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.write_str("(")?;
         self.0.iter().enumerate().try_for_each(|(i, x)| {
             if i != 0 {
                 f.write_str(", ")?;
             }
-            if f64::abs(*x) < 1.0e-2 && *x != 0.0 {
-                f.write_fmt(format_args!("{x:.10E}"))
-            } else {
-                f.write_fmt(format_args!("{x:?}"))
-            }
+            Display::fmt(&FloatDisplay(*x), f)
         })?;
         f.write_str(")")
     }
 }
 
-impl<'a> Display for SliceDisplay<'a, usize> {
+impl Display for SliceDisplay<'_, usize> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.write_str("(")?;
         self.0.iter().enumerate().try_for_each(|(i, x)| {
@@ -46,7 +75,7 @@ impl<'a> Display for SliceDisplay<'a, usize> {
     }
 }
 
-impl<'a> Display for SliceDisplay<'a, String> {
+impl Display for SliceDisplay<'_, String> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.write_str("(")?;
         self.0.iter().enumerate().try_for_each(|(i, x)| {
@@ -102,7 +131,7 @@ impl<I: Clone + IntoIterator<Item = usize>> Display for IndexSliceDisplay<I> {
     }
 }
 
-impl<'a, I: Clone + IntoIterator<Item = usize>> Display for SliceDisplay<'a, IndexSliceDisplay<I>> {
+impl<I: Clone + IntoIterator<Item = usize>> Display for SliceDisplay<'_, IndexSliceDisplay<I>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.write_str("(")?;
         self.0.iter().enumerate().try_for_each(|(i, x)| {
@@ -115,6 +144,22 @@ impl<'a, I: Clone + IntoIterator<Item = usize>> Display for SliceDisplay<'a, Ind
     }
 }
 
+/// trait for outputting by STEP file format.
+pub trait DisplayByStep {
+    ///  formatter
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result;
+}
+
+impl<T: DisplayByStep> DisplayByStep for &T {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result { DisplayByStep::fmt(*self, idx, f) }
+}
+
+impl<T: DisplayByStep> DisplayByStep for Box<T> {
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
+        DisplayByStep::fmt(self.as_ref(), idx, f)
+    }
+}
+
 /// Display struct for outputting some objects to STEP file format.
 #[derive(Clone, Debug)]
 pub struct StepDisplay<T> {
@@ -122,7 +167,7 @@ pub struct StepDisplay<T> {
     idx: usize,
 }
 
-impl<'a, T> Display for SliceDisplay<'a, StepDisplay<T>>
+impl<T> Display for SliceDisplay<'_, StepDisplay<T>>
 where StepDisplay<T>: Display
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
@@ -133,19 +178,17 @@ where StepDisplay<T>: Display
 impl<T> StepDisplay<T> {
     /// constructor
     #[inline]
-    pub fn new(entity: T, idx: usize) -> Self { Self { entity, idx } }
+    pub const fn new(entity: T, idx: usize) -> Self { Self { entity, idx } }
     /// return entity
     #[inline]
-    pub fn entity(&self) -> &T { &self.entity }
+    pub const fn entity(&self) -> &T { &self.entity }
     /// return index
     #[inline]
-    pub fn index(&self) -> usize { self.idx }
+    pub const fn index(&self) -> usize { self.idx }
 }
 
-/// Constant numbers of lines for outputting an object to a STEP file.
-pub trait ConstStepLength {
-    /// the number of line
-    const LENGTH: usize;
+impl<T: DisplayByStep> Display for StepDisplay<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result { DisplayByStep::fmt(&self.entity, self.idx, f) }
 }
 
 /// Calculate how many lines are used in outputting an object to a STEP file
@@ -154,16 +197,75 @@ pub trait StepLength {
     fn step_length(&self) -> usize;
 }
 
-impl<T: ConstStepLength> StepLength for T {
-    fn step_length(&self) -> usize { T::LENGTH }
+impl<T: StepLength> StepLength for &T {
+    #[inline(always)]
+    fn step_length(&self) -> usize { StepLength::step_length(*self) }
+}
+
+impl<T: StepLength> StepLength for Box<T> {
+    #[inline(always)]
+    fn step_length(&self) -> usize { self.as_ref().step_length() }
+}
+
+/// Constant numbers of lines for outputting an object to a STEP file.
+/// `x.step_length() == X::LENGTH` must always hold.
+pub trait ConstStepLength: StepLength {
+    /// the number of line
+    const LENGTH: usize;
+}
+
+impl<T: ConstStepLength> ConstStepLength for &T {
+    const LENGTH: usize = T::LENGTH;
+}
+
+impl<T: ConstStepLength> ConstStepLength for Box<T> {
+    const LENGTH: usize = T::LENGTH;
 }
 
 macro_rules! impl_const_step_length {
-    ($type: ty, $len: expr) => {
-        impl ConstStepLength for $type {
+    ($type: ty, $len: expr $(,<$($gen: ident),*>)?) => {
+        impl$(<$($gen),*>)? ConstStepLength for $type {
             const LENGTH: usize = $len;
         }
+        impl$(<$($gen),*>)? StepLength for $type {
+            #[inline(always)]
+            fn step_length(&self) -> usize { <Self as ConstStepLength>::LENGTH }
+        }
     };
+}
+
+/// Additional information for output to `edge_curve`.
+pub trait StepCurve {
+    /// the parameter `same_sense`.
+    #[inline(always)]
+    fn same_sense(&self) -> bool { true }
+}
+
+impl<T: StepCurve> StepCurve for &T {
+    #[inline(always)]
+    fn same_sense(&self) -> bool { (*self).same_sense() }
+}
+
+impl<T: StepCurve> StepCurve for Box<T> {
+    #[inline(always)]
+    fn same_sense(&self) -> bool { self.as_ref().same_sense() }
+}
+
+/// Additional information for output to `face_surface`.
+pub trait StepSurface {
+    /// the parameter `same_sense`.
+    #[inline(always)]
+    fn same_sense(&self) -> bool { true }
+}
+
+impl<T: StepSurface> StepSurface for &T {
+    #[inline(always)]
+    fn same_sense(&self) -> bool { (*self).same_sense() }
+}
+
+impl<T: StepSurface> StepSurface for Box<T> {
+    #[inline(always)]
+    fn same_sense(&self) -> bool { self.as_ref().same_sense() }
 }
 
 /// Describe STEP file header
@@ -212,34 +314,34 @@ impl Display for StepHeader {
         let empty_string = [String::new()];
         f.write_fmt(format_args!(
             "HEADER;
-FILE_DESCRIPTION(('Shape Data from Truck'), '2;1');
-FILE_NAME('{}', '{}', ({}), ({}), 'truck', '{}', '{}');
-FILE_SCHEMA(('{}'));
+FILE_DESCRIPTION(('Shape Data from truck'), '2;1');
+FILE_NAME('{file_name}', '{time_stamp}', {authors}, {organization}, 'truck', '{origination_system}', '{authorization}');
+FILE_SCHEMA(('{schema}'));
 ENDSEC;\n",
-            self.file_name,
-            self.time_stamp,
-            if self.authors.is_empty() {
+            file_name = self.file_name,
+            time_stamp = self.time_stamp,
+            authors = if self.authors.is_empty() {
                 SliceDisplay(&empty_string)
             } else {
                 SliceDisplay(&self.authors)
             },
-            if self.organization.is_empty() {
+            organization = if self.organization.is_empty() {
                 SliceDisplay(&empty_string)
             } else {
                 SliceDisplay(&self.organization)
             },
-            self.origination_system,
-            self.authorization,
-            self.schema,
+            origination_system = self.origination_system,
+            authorization = self.authorization,
+            schema = self.schema,
         ))
     }
 }
 
-/// Display model with configuations
+/// Display model with configurations
 #[derive(Clone, Debug)]
 pub struct StepModel<'a, P, C, S>(PreStepModel<'a, P, C, S>);
 
-/// Display models with configuations
+/// Display models with configurations
 #[derive(Clone, Debug)]
 pub struct StepModels<'a, P, C, S> {
     models: Vec<PreStepModel<'a, P, C, S>>,

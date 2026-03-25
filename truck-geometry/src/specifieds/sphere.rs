@@ -20,6 +20,28 @@ impl ParametricSurface for Sphere {
     type Point = Point3;
     type Vector = Vector3;
     #[inline(always)]
+    fn der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
+        let ((su, cu), (sv, cv)) = (u.sin_cos(), v.sin_cos());
+        let center = match (m, n) {
+            (0, 0) => self.center().to_vec(),
+            _ => Vector3::zero(),
+        };
+        let u_part = match m % 4 {
+            0 => Vector3::new(su, su, cu),
+            1 => Vector3::new(cu, cu, -su),
+            2 => Vector3::new(-su, -su, -cu),
+            _ => Vector3::new(-cu, -cu, su),
+        };
+        let v_z = if n == 0 { 1.0 } else { 0.0 };
+        let v_part = match n % 4 {
+            0 => Vector3::new(cv, sv, v_z),
+            1 => Vector3::new(-sv, cv, 0.0),
+            2 => Vector3::new(-cv, -sv, 0.0),
+            _ => Vector3::new(sv, -cv, 0.0),
+        };
+        center + self.radius * u_part.mul_element_wise(v_part)
+    }
+    #[inline(always)]
     fn subs(&self, u: f64, v: f64) -> Point3 { self.center() + self.radius * self.normal(u, v) }
     #[inline(always)]
     fn uder(&self, u: f64, v: f64) -> Vector3 {
@@ -64,22 +86,17 @@ impl ParametricSurface3D for Sphere {
             f64::cos(u),
         )
     }
-}
-
-#[test]
-fn sphere_derivation_test() {
-    let center = Point3::new(1.0, 2.0, 3.0);
-    let radius = 4.56;
-    let sphere = Sphere::new(center, radius);
-    const N: usize = 100;
-    for i in 0..N {
-        for j in 0..N {
-            let u = PI * i as f64 / N as f64;
-            let v = 2.0 * PI * j as f64 / N as f64;
-            let normal = sphere.normal(u, v);
-            assert!(normal.dot(sphere.uder(u, v)).so_small());
-            assert!(normal.dot(sphere.vder(u, v)).so_small());
-        }
+    #[inline(always)]
+    fn normal_uder(&self, u: f64, v: f64) -> Vector3 {
+        Vector3::new(
+            f64::cos(u) * f64::cos(v),
+            f64::cos(u) * f64::sin(v),
+            -f64::sin(u),
+        )
+    }
+    #[inline(always)]
+    fn normal_vder(&self, u: f64, v: f64) -> Vector3 {
+        Vector3::new(-f64::sin(u) * f64::sin(v), f64::sin(u) * f64::cos(v), 0.0)
     }
 }
 
@@ -186,34 +203,3 @@ impl SearchNearestParameter<D2> for Sphere {
         Some((u, v))
     }
 }
-
-#[cfg(test)]
-fn exec_search_parameter_test() {
-    let center = Point3::new(
-        100.0 * rand::random::<f64>() - 50.0,
-        100.0 * rand::random::<f64>() - 50.0,
-        100.0 * rand::random::<f64>() - 50.0,
-    );
-    let radius = 100.0 * rand::random::<f64>();
-    let sphere = Sphere::new(center, radius);
-    let u = PI * rand::random::<f64>();
-    let v = 2.0 * PI * rand::random::<f64>();
-    let pt = sphere.subs(u, v);
-    let (u0, v0) = sphere.search_parameter(pt, None, 100).unwrap();
-    assert_near!(Vector2::new(u, v), Vector2::new(u0, v0));
-    let pt = pt
-        + Vector3::new(
-            (0.1 * rand::random::<f64>() + 0.01) * f64::signum(rand::random::<f64>() - 0.5),
-            (0.1 * rand::random::<f64>() + 0.01) * f64::signum(rand::random::<f64>() - 0.5),
-            (0.1 * rand::random::<f64>() + 0.01) * f64::signum(rand::random::<f64>() - 0.5),
-        );
-    assert!(sphere.search_parameter(pt, None, 100).is_none());
-    let (u, v) = sphere.search_nearest_parameter(pt, None, 100).unwrap();
-    assert_near!(
-        sphere.subs(u, v),
-        center + (pt - center).normalize() * radius
-    );
-}
-
-#[test]
-fn search_parameter_test() { (0..10).for_each(|_| exec_search_parameter_test()) }

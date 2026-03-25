@@ -1,31 +1,219 @@
 use crate::*;
+use itertools::Itertools;
 use std::ops::{Bound, Deref, DerefMut};
 use truck_base::cgmath64::control_point::ControlPoint;
 
+impl PolylineCurve<Point2> {
+    /// Signed area of area enclosed when endpoints are connected
+    /// # Example
+    /// ```
+    /// use truck_polymesh::*;
+    /// use std::f64::consts::PI;
+    /// let mut hexagon = (0..6).map(|i| {
+    ///         let t = PI / 3.0 * i as f64;
+    ///         Point2::new(f64::cos(t), f64::sin(t))
+    ///     })
+    ///     .collect::<PolylineCurve<_>>();
+    /// assert_near!(hexagon.area(), 1.5 * f64::sqrt(3.0));
+    /// hexagon.invert();
+    /// assert_near!(hexagon.area(), -1.5 * f64::sqrt(3.0));
+    /// ```
+    #[inline(always)]
+    pub fn area(&self) -> f64 {
+        let sum = |sum, (p, q): (&Point2, &Point2)| sum + (q.x + p.x) * (q.y - p.y);
+        self.iter().circular_tuple_windows().fold(0.0, sum) / 2.0
+    }
+
+    /// whether `c` is included in enclosed domain when endpoints are connected
+    /// # Example
+    /// ```
+    /// use truck_polymesh::*;
+    /// use std::f64::consts::PI;
+    /// let hexagon = (0..6).map(|i| {
+    ///         let t = PI / 3.0 * i as f64;
+    ///         Point2::new(f64::cos(t), f64::sin(t))
+    ///     })
+    ///     .collect::<PolylineCurve<_>>();
+    /// let p0 = Point2::new(0.9, 0.0);
+    /// assert!(hexagon.include(p0));
+    /// let p1 = Point2::new(0.0, 1.0);
+    /// assert!(!hexagon.include(p1));
+    /// ```
+    pub fn include(&self, c: Point2) -> bool {
+        let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
+        let r = Vector2::new(f64::cos(t), f64::sin(t));
+        self.iter()
+            .circular_tuple_windows()
+            .try_fold(0_i32, move |counter, (p0, p1)| {
+                let a = p0 - c;
+                let b = p1 - c;
+                let s0 = r.x * a.y - r.y * a.x; // v times a
+                let s1 = r.x * b.y - r.y * b.x; // v times b
+                let s2 = a.x * b.y - a.y * b.x; // a times b
+                let x = s2 / (s1 - s0);
+                if x.so_small() && s0 * s1 < 0.0 {
+                    None
+                } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
+                    Some(counter + 1)
+                } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
+                    Some(counter - 1)
+                } else {
+                    Some(counter)
+                }
+            })
+            .map(|counter| counter > 0)
+            .unwrap_or(false)
+    }
+}
+
+/// Calculate the area of a region bounded by multiple polylines
+/// # Example
+/// ```
+/// use truck_polymesh::*;
+/// use std::f64::consts::PI;
+/// // the outer boundary is counter-clockwise
+/// let large_hexagon = (0..6).map(|i| {
+///         let t = PI / 3.0 * i as f64;
+///         Point2::new(2.0 * f64::cos(t), 2.0 * f64::sin(t))
+///     })
+///     .collect::<PolylineCurve<_>>();
+/// // the inner boundary is clockwise
+/// let small_hexagon = (0..6).map(|i| {
+///         let t = PI / 3.0 * i as f64;
+///         Point2::new(f64::sin(t), f64::cos(t))
+///     })
+///     .collect::<PolylineCurve<_>>();
+/// let boundaries = [large_hexagon, small_hexagon];
+/// assert_near!(polyline_curve::area(&boundaries), 4.5 * f64::sqrt(3.0));
+/// ```
+pub fn area<'a>(boundaries: impl IntoIterator<Item = &'a PolylineCurve<Point2>>) -> f64 {
+    boundaries.into_iter().map(|poly| poly.area()).sum::<f64>()
+}
+
+/// whether `c` is included in enclosed multiple domains when endpoints of each polyline are connected
+/// # Example
+/// ```
+/// use truck_polymesh::*;
+/// use std::f64::consts::PI;
+/// // the outer boundary is counter-clockwise
+/// let large_hexagon = (0..6).map(|i| {
+///         let t = PI / 3.0 * i as f64;
+///         Point2::new(2.0 * f64::cos(t), 2.0 * f64::sin(t))
+///     })
+///     .collect::<PolylineCurve<_>>();
+/// // the inner boundary is clockwise
+/// let small_hexagon = (0..6).map(|i| {
+///         let t = PI / 3.0 * i as f64;
+///         Point2::new(f64::sin(t), f64::cos(t))
+///     })
+///     .collect::<PolylineCurve<_>>();
+/// let boundaries = [large_hexagon, small_hexagon];
+/// let p0 = Point2::new(1.5, 0.0);
+/// assert!(polyline_curve::include(&boundaries, p0));
+/// let p1 = Point2::new(0.0, 0.0);
+/// assert!(!polyline_curve::include(&boundaries, p1));
+/// ```
+pub fn include<'a>(
+    boundaries: impl IntoIterator<Item = &'a PolylineCurve<Point2>>,
+    c: Point2,
+) -> bool {
+    let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
+    let r = Vector2::new(f64::cos(t), f64::sin(t));
+    boundaries
+        .into_iter()
+        .flat_map(|boundary| boundary.iter().circular_tuple_windows())
+        .try_fold(0_i32, move |counter, (p0, p1)| {
+            let a = p0 - c;
+            let b = p1 - c;
+            let s0 = r.x * a.y - r.y * a.x; // v times a
+            let s1 = r.x * b.y - r.y * b.x; // v times b
+            let s2 = a.x * b.y - a.y * b.x; // a times b
+            let x = s2 / (s1 - s0);
+            if x.so_small() && s0 * s1 < 0.0 {
+                None
+            } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
+                Some(counter + 1)
+            } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
+                Some(counter - 1)
+            } else {
+                Some(counter)
+            }
+        })
+        .map(|counter| counter > 0)
+        .unwrap_or(false)
+}
+
+impl<P> AsRef<Vec<P>> for PolylineCurve<P> {
+    #[inline(always)]
+    fn as_ref(&self) -> &Vec<P> { &self.0 }
+}
+
+impl<P> AsMut<Vec<P>> for PolylineCurve<P> {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut Vec<P> { &mut self.0 }
+}
+
+impl<P> AsRef<[P]> for PolylineCurve<P> {
+    #[inline(always)]
+    fn as_ref(&self) -> &[P] { &self.0 }
+}
+
+impl<P> AsMut<[P]> for PolylineCurve<P> {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [P] { &mut self.0 }
+}
+
 impl<P> Deref for PolylineCurve<P> {
     type Target = Vec<P>;
+    #[inline(always)]
     fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl<P> DerefMut for PolylineCurve<P> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
 }
 
 impl<P> From<Vec<P>> for PolylineCurve<P> {
+    #[inline(always)]
     fn from(v: Vec<P>) -> Self { Self(v) }
 }
 
 impl<P> From<PolylineCurve<P>> for Vec<P> {
+    #[inline(always)]
     fn from(v: PolylineCurve<P>) -> Self { v.0 }
 }
 
 impl<P> FromIterator<P> for PolylineCurve<P> {
+    #[inline(always)]
     fn from_iter<I: IntoIterator<Item = P>>(iter: I) -> Self { Self(Vec::from_iter(iter)) }
+}
+
+impl<P> IntoIterator for PolylineCurve<P> {
+    type Item = P;
+    type IntoIter = std::vec::IntoIter<P>;
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+}
+
+impl<'a, P> IntoIterator for &'a PolylineCurve<P> {
+    type Item = &'a P;
+    type IntoIter = std::slice::Iter<'a, P>;
+    #[inline(always)]
+    fn into_iter(self) -> Self::IntoIter { self.0.iter() }
 }
 
 impl<P: ControlPoint<f64>> ParametricCurve for PolylineCurve<P> {
     type Point = P;
     type Vector = P::Diff;
+    #[inline(always)]
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector {
+        match n {
+            0 => self.subs(t).to_vec(),
+            1 => self.der(t),
+            _ => Self::Vector::zero(),
+        }
+    }
     #[inline(always)]
     fn subs(&self, t: f64) -> P {
         if self.is_empty() {

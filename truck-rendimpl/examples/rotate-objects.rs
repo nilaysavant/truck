@@ -12,7 +12,7 @@ use std::sync::Arc;
 use truck_meshalgo::prelude::*;
 use truck_platform::*;
 use truck_rendimpl::*;
-use winit::{dpi::*, event::*, event_loop::ControlFlow};
+use winit::{dpi::*, event::*, keyboard::*};
 mod app;
 use app::*;
 
@@ -41,12 +41,12 @@ impl MyRender {
             Point3::origin(),
             Vector3::unit_y(),
         );
-        Camera::perspective_camera(
-            mat.invert().unwrap(),
-            Rad(std::f64::consts::PI / 8.0),
-            0.1,
-            40.0,
-        )
+        Camera {
+            matrix: mat.invert().unwrap(),
+            method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+            near_clip: 0.1,
+            far_clip: 40.0,
+        }
     }
 
     fn load_obj<R: Read>(&mut self, reader: R) {
@@ -187,8 +187,15 @@ impl App for MyRender {
         match delta {
             MouseScrollDelta::LineDelta(_, y) => {
                 let camera = &mut self.scene.studio_config_mut().camera;
-                let trans_vec = camera.eye_direction() * 0.2 * y as f64;
-                camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
+                match &mut camera.method {
+                    ProjectionMethod::Parallel { screen_size } => {
+                        *screen_size *= 0.9f64.powf(y as f64);
+                    }
+                    ProjectionMethod::Perspective { .. } => {
+                        let trans_vec = camera.eye_direction() * y as f64 * 0.2;
+                        camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
+                    }
+                }
             }
             MouseScrollDelta::PixelDelta(_) => {}
         };
@@ -215,13 +222,13 @@ impl App for MyRender {
         }
         Self::default_control_flow()
     }
-    fn keyboard_input(&mut self, input: KeyboardInput, _: bool) -> ControlFlow {
-        let keycode = match input.virtual_keycode {
-            Some(keycode) => keycode,
-            None => return Self::default_control_flow(),
+    fn keyboard_input(&mut self, input: KeyEvent, _: bool) -> ControlFlow {
+        let keycode = match input.physical_key {
+            PhysicalKey::Code(keycode) => keycode,
+            _ => return Self::default_control_flow(),
         };
         match keycode {
-            VirtualKeyCode::P => {
+            KeyCode::KeyP => {
                 if let Some(ref instant) = self.camera_changed {
                     let time = instant.elapsed().as_secs_f64();
                     if time < 0.2 {
@@ -230,19 +237,14 @@ impl App for MyRender {
                 }
                 let camera = &mut self.scene.studio_config_mut().camera;
                 self.camera_changed = Some(std::time::Instant::now());
-                *camera = match camera.projection_type() {
-                    ProjectionType::Parallel => Camera::perspective_camera(
-                        camera.matrix,
-                        Rad(std::f64::consts::PI / 8.0),
-                        0.1,
-                        40.0,
-                    ),
-                    ProjectionType::Perspective => {
-                        Camera::parallel_camera(camera.matrix, 10.0, 0.1, 40.0)
+                camera.method = match camera.method {
+                    ProjectionMethod::Parallel { .. } => {
+                        ProjectionMethod::perspective(Rad(PI / 8.0))
                     }
+                    ProjectionMethod::Perspective { .. } => ProjectionMethod::parallel(10.0),
                 }
             }
-            VirtualKeyCode::L => {
+            KeyCode::KeyL => {
                 if let Some(ref instant) = self.light_changed {
                     let time = instant.elapsed().as_secs_f64();
                     if time < 0.2 {

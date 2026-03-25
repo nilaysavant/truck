@@ -1,5 +1,5 @@
 use crate::{errors::Error, wire::EdgeIter, *};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 impl<P, C, S> Face<P, C, S> {
     /// Creates a new face by a wire.
@@ -676,15 +676,15 @@ impl<P, C, S> Face<P, C, S> {
     /// # Examples
     /// ```
     /// use truck_topology::*;
-    /// let v = Vertex::news(&[(); 4]);
+    /// let v = Vertex::news([(); 4]);
     /// let shared_edge = Edge::new(&v[0], &v[1], ());
     /// let another_edge = Edge::new(&v[0], &v[1], ());
     /// let inversed_edge = shared_edge.inverse();
     /// let wire = vec![
-    ///     Wire::from_iter(vec![&Edge::new(&v[2], &v[0], ()), &shared_edge, &Edge::new(&v[1], &v[2], ())]),
-    ///     Wire::from_iter(vec![&Edge::new(&v[2], &v[0], ()), &another_edge, &Edge::new(&v[1], &v[2], ())]),
-    ///     Wire::from_iter(vec![&Edge::new(&v[3], &v[0], ()), &shared_edge, &Edge::new(&v[1], &v[3], ())]),
-    ///     Wire::from_iter(vec![&Edge::new(&v[3], &v[1], ()), &inversed_edge, &Edge::new(&v[0], &v[3], ())]),
+    ///     wire![&Edge::new(&v[2], &v[0], ()), &shared_edge, &Edge::new(&v[1], &v[2], ())],
+    ///     wire![&Edge::new(&v[2], &v[0], ()), &another_edge, &Edge::new(&v[1], &v[2], ())],
+    ///     wire![&Edge::new(&v[3], &v[0], ()), &shared_edge, &Edge::new(&v[1], &v[3], ())],
+    ///     wire![&Edge::new(&v[3], &v[1], ()), &inversed_edge, &Edge::new(&v[0], &v[3], ())],
     /// ];
     /// let face: Vec<_> = wire.into_iter().map(|w| Face::new(vec![w], ())).collect();
     /// assert!(face[0].border_on(&face[2]));
@@ -692,13 +692,92 @@ impl<P, C, S> Face<P, C, S> {
     /// assert!(face[0].border_on(&face[3]));
     /// ```
     pub fn border_on(&self, other: &Face<P, C, S>) -> bool {
-        let mut hashmap = HashMap::default();
         let edge_iter = self.boundary_iters().into_iter().flatten();
-        edge_iter.for_each(|edge| {
-            hashmap.insert(edge.id(), edge);
-        });
+        let hashset: HashSet<_> = edge_iter.map(|edge| edge.id()).collect();
         let mut edge_iter = other.boundary_iters().into_iter().flatten();
-        edge_iter.any(|edge| hashmap.insert(edge.id(), edge).is_some())
+        edge_iter.any(|edge| hashset.contains(&edge.id()))
+    }
+
+    /// Returns the border between two faces `self` and `other`.
+    /// # Examples
+    /// ```
+    /// use truck_topology::*;
+    /// let v = Vertex::news([(); 5]);
+    /// let shared_edge = [
+    ///     Edge::new(&v[0], &v[1], ()),
+    ///     Edge::new(&v[2], &v[3], ()),
+    ///     Edge::new(&v[3], &v[4], ()),
+    /// ];
+    ///
+    /// let boundary0 = wire![
+    ///     shared_edge[0].clone(),
+    ///     Edge::new(&v[1], &v[2], ()),
+    ///     shared_edge[1].clone(),
+    ///     shared_edge[2].clone(),
+    ///     Edge::new(&v[4], &v[0], ()),
+    /// ];
+    /// let face0 = Face::new(vec![boundary0], ());
+    ///
+    /// let boundary1 = wire![
+    ///     shared_edge[1].inverse(),
+    ///     Edge::new(&v[2], &v[1], ()),
+    ///     shared_edge[0].inverse(),
+    ///     Edge::new(&v[0], &v[4], ()),
+    ///     shared_edge[2].inverse(),
+    /// ];
+    /// let face1 = Face::new(vec![boundary1], ());
+    ///
+    /// let borders0 = face0.border_wires(&face1);
+    /// assert_eq!(
+    ///     borders0,
+    ///     vec![
+    ///         wire![shared_edge[0].clone()],
+    ///         wire![shared_edge[1].clone(), shared_edge[2].clone()],
+    ///     ],
+    /// );
+    ///
+    /// let borders1 = face1.border_wires(&face0);
+    /// assert_eq!(
+    ///     borders1,
+    ///     vec![
+    ///         wire![shared_edge[0].inverse()],
+    ///         wire![shared_edge[2].inverse(), shared_edge[1].inverse()],
+    ///     ],
+    /// );
+    /// ```
+    pub fn border_wires(&self, other: &Face<P, C, S>) -> Vec<Wire<P, C>> {
+        let edge_iter = other.boundary_iters().into_iter().flatten();
+        let hashset: HashSet<_> = edge_iter.map(|edge| edge.id()).collect();
+        let closure = move |boundary: BoundaryIter<'_, P, C>| {
+            let mut conti = false;
+            let mut border_wires = Vec::<Wire<P, C>>::new();
+            for edge in boundary {
+                if hashset.contains(&edge.id()) {
+                    if conti {
+                        let wire = border_wires.last_mut().unwrap();
+                        wire.push_back(edge);
+                    } else {
+                        border_wires.push(wire![edge]);
+                        conti = true;
+                    }
+                } else {
+                    conti = false;
+                }
+            }
+            if conti && border_wires.len() > 1 {
+                let first = border_wires.first().unwrap().front_vertex().unwrap();
+                let back = border_wires.last().unwrap().back_vertex().unwrap();
+                if first == back {
+                    let first = border_wires.remove(0);
+                    border_wires.last_mut().unwrap().extend(first);
+                }
+            }
+            border_wires
+        };
+        self.boundary_iters()
+            .into_iter()
+            .flat_map(closure)
+            .collect()
     }
 
     /// Cuts a face with only one boundary by an edge.
@@ -755,6 +834,42 @@ impl<P, C, S> Face<P, C, S> {
     /// assert!(face.cut_by_edge(Edge::new(&v[1], &v[4], ())).is_none());
     pub fn cut_by_edge(&self, edge: Edge<P, C>) -> Option<(Self, Self)>
     where S: Clone {
+        self.cut_by_wire([edge].into())
+    }
+
+    /// Cuts a face with only one boundary by an edge.
+    /// # Examples
+    /// ```
+    /// use truck_topology::*;
+    /// let v = Vertex::news([(); 5]);
+    /// let boundary = Wire::from([
+    ///     Edge::new(&v[0], &v[1], ()),
+    ///     Edge::new(&v[1], &v[2], ()),
+    ///     Edge::new(&v[2], &v[3], ()),
+    ///     Edge::new(&v[3], &v[0], ()),
+    /// ]);
+    /// let face = Face::new(vec![boundary], ());
+    /// let wire = Wire::from([
+    ///     Edge::new(&v[1], &v[4], ()),
+    ///     Edge::new(&v[4], &v[3], ()),
+    /// ]);
+    /// let (face0, face1) = face.cut_by_wire(wire).unwrap();
+    ///
+    /// // The front vertex of face0's boundary becomes the back of cutting wire.
+    /// let v0: Vec<Vertex<()>> = face0.boundaries()[0].vertex_iter().collect();
+    /// assert_eq!(v0, vec![v[3].clone(), v[0].clone(), v[1].clone(), v[4].clone()]);
+    ///
+    /// let v1: Vec<Vertex<()>> = face1.boundaries()[0].vertex_iter().collect();
+    /// assert_eq!(v1, vec![v[1].clone(), v[2].clone(), v[3].clone(), v[4].clone()]);
+    /// ```
+    /// # Failures
+    /// Returns `None` if:
+    /// - `self` has several boundaries, or
+    /// - `self` does not include vertices of the end vertices of `wire`.
+    ///
+    /// See also [`Face::cut_by_edge`].
+    pub fn cut_by_wire(&self, wire: Wire<P, C>) -> Option<(Self, Self)>
+    where S: Clone {
         if self.boundaries.len() != 1 {
             return None;
         }
@@ -763,22 +878,22 @@ impl<P, C, S> Face<P, C, S> {
             orientation: self.orientation,
             surface: Arc::new(Mutex::new(self.surface())),
         };
-        let wire = &mut face0.boundaries[0];
-        let i = wire
+        let boundary = &mut face0.boundaries[0];
+        let i = boundary
             .edge_iter()
             .enumerate()
-            .find(|(_, e)| e.front() == edge.back())
+            .find(|(_, e)| Some(e.front()) == wire.back_vertex())
             .map(|(i, _)| i)?;
-        let j = wire
+        let j = boundary
             .edge_iter()
             .enumerate()
-            .find(|(_, e)| e.back() == edge.front())
+            .find(|(_, e)| Some(e.back()) == wire.front_vertex())
             .map(|(i, _)| i)?;
-        wire.rotate_left(i);
-        let j = (j + wire.len() - i) % wire.len();
-        let mut new_wire = wire.split_off(j + 1);
-        wire.push_back(edge.clone());
-        new_wire.push_back(edge.inverse());
+        boundary.rotate_left(i);
+        let j = (j + boundary.len() - i) % boundary.len();
+        let mut new_wire = boundary.split_off(j + 1);
+        new_wire.extend(wire.iter().rev().map(|e| e.inverse()));
+        boundary.extend(wire);
         debug_assert!(Face::try_new(self.boundaries.clone(), ()).is_ok());
         debug_assert!(Face::try_new(vec![new_wire.clone()], ()).is_ok());
         let face1 = Face {
@@ -1042,7 +1157,7 @@ pub struct BoundaryIter<'a, P, C> {
     orientation: bool,
 }
 
-impl<'a, P, C> Iterator for BoundaryIter<'a, P, C> {
+impl<P, C> Iterator for BoundaryIter<'_, P, C> {
     type Item = Edge<P, C>;
     #[inline(always)]
     fn next(&mut self) -> Option<Edge<P, C>> {
@@ -1059,7 +1174,7 @@ impl<'a, P, C> Iterator for BoundaryIter<'a, P, C> {
     fn last(mut self) -> Option<Edge<P, C>> { self.next_back() }
 }
 
-impl<'a, P, C> DoubleEndedIterator for BoundaryIter<'a, P, C> {
+impl<P, C> DoubleEndedIterator for BoundaryIter<'_, P, C> {
     #[inline(always)]
     fn next_back(&mut self) -> Option<Edge<P, C>> {
         match self.orientation {
@@ -1069,16 +1184,14 @@ impl<'a, P, C> DoubleEndedIterator for BoundaryIter<'a, P, C> {
     }
 }
 
-impl<'a, P, C> ExactSizeIterator for BoundaryIter<'a, P, C> {
+impl<P, C> ExactSizeIterator for BoundaryIter<'_, P, C> {
     #[inline(always)]
     fn len(&self) -> usize { self.edge_iter.len() }
 }
 
-impl<'a, P, C> std::iter::FusedIterator for BoundaryIter<'a, P, C> {}
+impl<P, C> std::iter::FusedIterator for BoundaryIter<'_, P, C> {}
 
-impl<'a, P: Debug, C: Debug, S: Debug> Debug
-    for DebugDisplay<'a, Face<P, C, S>, FaceDisplayFormat>
-{
+impl<P: Debug, C: Debug, S: Debug> Debug for DebugDisplay<'_, Face<P, C, S>, FaceDisplayFormat> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.format {
             FaceDisplayFormat::Full { wire_format } => f

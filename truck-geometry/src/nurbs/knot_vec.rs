@@ -100,7 +100,7 @@ impl KnotVec {
         }
     }
 
-    /// Calculates B-spline basis functions at `t` with degree `degree`.
+    /// Calculates B-spline basis functions at `t` with degree `degree` and `der_rank`th-order derivation.
     /// # Panics
     /// If the length of `self` is not more than `degree`, panic occurs.
     /// # Remarks
@@ -117,7 +117,7 @@ impl KnotVec {
     /// let degree = 2;
     /// for i in 0..N {
     ///     let t = 2.0 + 4.0 / (N as f64) * (i as f64);
-    ///     let res = knot_vec.bspline_basis_functions(degree, t);
+    ///     let res = knot_vec.bspline_basis_functions(degree, 0, t);
     ///     let sum = res.iter().fold(0.0, |sum, a| sum + a);
     ///     assert_near2!(sum, 1.0);
     /// }
@@ -132,7 +132,8 @@ impl KnotVec {
     /// let degree = 3;
     /// for i in 0..=N {
     ///     let t = 1.0 / (N as f64) * (i as f64);
-    ///     let res = knot_vec.bspline_basis_functions(degree, t);
+    ///     // substitution
+    ///     let res = knot_vec.bspline_basis_functions(degree, 0, t);
     ///     let ans = [
     ///         1.0 * (1.0 - t) * (1.0 - t) * (1.0 - t),
     ///         3.0 * t * (1.0 - t) * (1.0 - t),
@@ -140,16 +141,26 @@ impl KnotVec {
     ///         1.0 * t * t * t,
     ///     ];
     ///     for i in 0..4 { assert_near2!(res[i], ans[i]); }
+    ///
+    ///     // 2nd-order derivation
+    ///     let res = knot_vec.bspline_basis_functions(degree, 2, t);
+    ///     let ans = [
+    ///         6.0 * (1.0 - t),
+    ///         6.0 * (3.0 * t - 2.0),
+    ///         6.0 * (1.0 - 3.0 * t),
+    ///         6.0 * t,
+    ///     ];
+    ///     for i in 0..4 { assert_near2!(res[i], ans[i]); }
     /// }
     /// ```
-    pub fn bspline_basis_functions(&self, degree: usize, t: f64) -> Vec<f64> {
-        match self.try_bspline_basis_functions(degree, t) {
+    pub fn bspline_basis_functions(&self, degree: usize, der_rank: usize, t: f64) -> Vec<f64> {
+        match self.try_bspline_basis_functions(degree, der_rank, t) {
             Ok(got) => got,
             Err(error) => panic!("{}", error),
         }
     }
 
-    /// Calculates B-spline basis functions at `t` with degree `degree`.
+    /// Calculates B-spline basis functions at `t` with degree `degree` and `der_rank`th-order derivation.
     /// # Failures
     /// - If the range of the knot vector is zero, returns [`Error::ZeroRange`].
     /// - If the length of `self` is not more than `degree`, returns [`Error::TooLargeDegree`].
@@ -167,7 +178,7 @@ impl KnotVec {
     /// let degree = 2;
     /// for i in 0..N {
     ///     let t = 2.0 + 4.0 / (N as f64) * (i as f64);
-    ///     let res = knot_vec.try_bspline_basis_functions(degree, t).unwrap();
+    ///     let res = knot_vec.try_bspline_basis_functions(degree, 0, t).unwrap();
     ///     let sum = res.iter().fold(0.0, |sum, a| sum + a);
     ///     assert_near2!(sum, 1.0);
     /// }
@@ -182,7 +193,8 @@ impl KnotVec {
     /// let degree = 3;
     /// for i in 0..=N {
     ///     let t = i as f64 / N as f64;
-    ///     let res = knot_vec.try_bspline_basis_functions(degree, t).unwrap();
+    ///     // substitution
+    ///     let res = knot_vec.try_bspline_basis_functions(degree, 0, t).unwrap();
     ///     let ans = [
     ///         1.0 * (1.0 - t) * (1.0 - t) * (1.0 - t),
     ///         3.0 * t * (1.0 - t) * (1.0 - t),
@@ -190,14 +202,32 @@ impl KnotVec {
     ///         1.0 * t * t * t,
     ///     ];
     ///     for i in 0..4 { assert_near2!(res[i], ans[i]); }
+    ///
+    ///     // 2nd-order derivation
+    ///     let res = knot_vec.try_bspline_basis_functions(degree, 2, t).unwrap();
+    ///     let ans = [
+    ///         6.0 * (1.0 - t),
+    ///         6.0 * (3.0 * t - 2.0),
+    ///         6.0 * (1.0 - 3.0 * t),
+    ///         6.0 * t,
+    ///     ];
+    ///     for i in 0..4 { assert_near2!(res[i], ans[i]); }
     /// }
     /// ```
-    pub fn try_bspline_basis_functions(&self, degree: usize, t: f64) -> Result<Vec<f64>> {
+    pub fn try_bspline_basis_functions(
+        &self,
+        degree: usize,
+        der_rank: usize,
+        t: f64,
+    ) -> Result<Vec<f64>> {
         let n = self.len() - 1;
         if self[0].near(&self[n]) {
             return Err(Error::ZeroRange);
         } else if n < degree {
             return Err(Error::TooLargeDegree(n + 1, degree));
+        }
+        if degree < der_rank {
+            return Ok(vec![0.0; n - degree]);
         }
 
         let idx = {
@@ -210,24 +240,53 @@ impl KnotVec {
                 idx
             }
         };
-        let mut res = vec![0.0; n];
-        res[idx] = 1.0;
 
-        for k in 1..=degree {
-            let base = if idx < k { 0 } else { idx - k };
+        if n < 32 {
+            let mut eval = [0.0; 32];
+            self.sub_bspline_basis_functions(degree, der_rank, t, idx, &mut eval);
+            Ok(eval[..n - degree].to_vec())
+        } else {
+            let mut eval = vec![0.0; n];
+            self.sub_bspline_basis_functions(degree, der_rank, t, idx, &mut eval);
+            eval.truncate(n - degree);
+            Ok(eval)
+        }
+    }
+
+    fn sub_bspline_basis_functions(
+        &self,
+        degree: usize,
+        der_rank: usize,
+        t: f64,
+        idx: usize,
+        eval: &mut [f64],
+    ) {
+        let n = self.len() - 1;
+        eval[idx] = 1.0;
+
+        for k in 1..=(degree - der_rank) {
+            let base = idx.saturating_sub(k);
             let delta = self[base + k] - self[base];
-            let max = if idx + k < n { idx } else { n - k - 1 };
             let mut a = inv_or_zero(delta) * (t - self[base]);
-            for i in base..=max {
+            for i in base..=usize::min(idx, n - k - 1) {
                 let delta = self[i + k + 1] - self[i + 1];
                 let b = inv_or_zero(delta) * (self[i + k + 1] - t);
-                res[i] = a * res[i] + b * res[i + 1];
+                eval[i] = a * eval[i] + b * eval[i + 1];
                 a = 1.0 - b;
             }
         }
 
-        res.truncate(n - degree);
-        Ok(res)
+        for k in (degree - der_rank + 1)..=degree {
+            let base = idx.saturating_sub(k);
+            let delta = self[base + k] - self[base];
+            let mut a = inv_or_zero(delta);
+            for i in base..=usize::min(idx, n - k - 1) {
+                let delta = self[i + k + 1] - self[i + 1];
+                let b = inv_or_zero(delta);
+                eval[i] = (a * eval[i] - b * eval[i + 1]) * k as f64;
+                a = b;
+            }
+        }
     }
 
     #[doc(hidden)]
@@ -241,7 +300,7 @@ impl KnotVec {
         let mut max = vec![0.0; m];
         for i in 1..N {
             let t = self[0] + range * (i as f64) / (N as f64);
-            let vals = self.try_bspline_basis_functions(degree, t).unwrap();
+            let vals = self.try_bspline_basis_functions(degree, 0, t).unwrap();
             for j in 0..m {
                 if max[j] < vals[j] {
                     max[j] = vals[j];
@@ -381,9 +440,7 @@ impl KnotVec {
         }
 
         self.0.truncate(self.len() - degree - 1);
-        for knot in &other.0 {
-            self.0.push(*knot);
-        }
+        self.0.extend(other.0.iter().copied());
 
         Ok(self)
     }
@@ -498,7 +555,7 @@ impl KnotVec {
     /// ```
     pub fn bezier_knot(degree: usize) -> KnotVec {
         let mut vec = vec![0.0; degree + 1];
-        vec.extend(std::iter::repeat(1.0).take(degree + 1));
+        vec.extend(std::iter::repeat_n(1.0, degree + 1));
         KnotVec(vec)
     }
 
@@ -513,8 +570,8 @@ impl KnotVec {
     /// ```
     pub fn uniform_knot(degree: usize, division: usize) -> KnotVec {
         let mut vec = vec![0.0; degree + 1];
-        vec.extend((1..division).map(|i| (i as f64) / (division as f64)));
-        vec.extend(std::iter::repeat(1.0).take(degree + 1));
+        vec.extend((1..division).map(|i| i as f64 / division as f64));
+        vec.extend(std::iter::repeat_n(1.0, degree + 1));
         KnotVec(vec)
     }
 }
@@ -530,6 +587,22 @@ impl From<Vec<f64>> for KnotVec {
     fn from(mut vec: Vec<f64>) -> KnotVec {
         vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
         KnotVec(vec)
+    }
+}
+
+impl From<&[f64]> for KnotVec {
+    /// Constructs by the reference of vector. The clone of vector is sorted by the order.
+    /// ```
+    /// use truck_geometry::prelude::KnotVec;
+    /// let knot_vec = KnotVec::from([1.0, 0.0, 3.0, 2.0].as_slice());
+    /// let arr : Vec<f64> = knot_vec.into();
+    /// assert_eq!(arr, vec![0.0, 1.0, 2.0, 3.0]);
+    /// ```
+    #[inline(always)]
+    fn from(vec: &[f64]) -> KnotVec {
+        let mut copy_vec = vec.to_vec();
+        copy_vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        KnotVec(copy_vec)
     }
 }
 

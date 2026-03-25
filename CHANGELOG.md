@@ -4,86 +4,119 @@ The version is of the bottom crate `truck-rendimpl`.
 
 ## Unreleased
 
-- Add `sphere.json` to tessellate test.
-- Tolerance setting of `put_together_same_attrs`.
-- Increase the capacity of step file in adhoc-viewer.
-- Fix clippy.
-- Add tessellate test with ABC Dataset.
-- Tessellate sphere modeling by `builder::cone`.
-- Refactoring by `itertools` and `array_macro`.
-- Enabled meshing when the boundary is not closed in the parameter space.
-- Robust tessellation in adhoc viewer.
-- New `SearchNearestParameter` for `RevolutedCurve`.
-- type def `ParameterRange`.
-- Change the STEP output precision.
-- Add some options to `step-to-mesh`.
-- `SearchNearestParameter` for `Processor`.
-- Derive macros are supported for cases with generics.
-- Remove `#[inline(always)]` in derive macro for release build of `truck-stepio`.
-- Parse `ELLIPSE` in STEP.
-- Fix the parameter lookup of the circle.
-- Output `CompressedShell` to `vtu` files.
-- Re-export `ShellCondition` in `truck-meshalgo`.
-- fix clippy
-- Re-export `truck-polymesh::*` in `truck-rendimpl`.
-- Add test for tessellate elementary step files.
-- Implementation for closed surface tessellation.
-- Refactor bounded geometries.
-- Parse `RATIONAL_B_SPLINE_SURFACE` in STEP.
-- Parse `CONICAL_SURFACE` in STEP.
-- Fix clippy.
-- Separate scheduled CI jobs to another repository.
-- STEP input test for surfaces.
-- Updates CI container `wasm-test`.
-- Fix build error of `bsp-animation` in wasm.
-- Fix the compile error with `webgl` feature.
-- cargo install by `--locked` in `wasm-test`.
-- STEP input test for primitives and curves.
-- `cargo fmt`
-- Fix building webgpu examples.
-- Set `--no-cache` option to build CI images.
-- Fix wasm-test container build.
-- Fix dependency check.
-- Put `truck_geometry::prelude` for resolve multiple re-export.
-- Fix dependency check.
-- Add dependency check.
-- Remove test build from `wasm-test`.
-- Updates wgpu to v0.16.
-- Updates CI containers.
-- Output `Vertex`, `Edge`, `Wire`, and `Face` to `vtu` files.
-- Add tests for traits in `truck_modeling::topo_traits`.
-- Refactor and renew test for `truck_modeling::geom_impl` by `proptest`.
-- Output `Shell<Point3, PolylineCurve, PolygonMesh>` to `vtu` files.
-- Output `PolygonMesh` to `vtp` files.
-- Separate features for meshalgo.
-- cargo upgrade
-- Remove `get_` prefix and replace `Mutex` and `Arc` more faster and compact mem.
-- JS wrapper of STEP API.
-- Parse `SURFACE_CURVE` (not translate to `IntersectionCurve`).
-- Refactoring for `ruststep` updating.
-- Parse of `PCURVE` in STEP.
-- Dummy struct for STEP parse failure.
-- Parse of `SURFACE_OF_LINEAR_EXTRUSION` in STEP.
-- Parse of `TOROIDAL_SURFACE` in STEP.
-- Parse of `B_SPLINE_SURFACE`s in STEP.
-- Implement robust meshing by `SearchNearestParameter`.
-- Remove invertible from tessellating traits.
-- Add "periodic" identifer to `ParametricCurve` and `ParametricSurface`.
-- Make struct naming canonical, resolve bump deps, remove unused deps
-
-Step input API is W.I.P. and hidden.
-
-- Remove recursive loop method.
-- Parse STEP cylindrical surface.
-- Implement `Serialize` and `Deserialize` for `stepio::r#in::alias::*`.
-- Adds `SURFACE_OF_REVOLUTION` and `SPHERICAL_SURFACE` to step input.
-- Fix some bugs in `step-to-obj`.
-- Parse STEP topology.
-- The parsing of the STEP geometry was implemented up to `BSplineSurfaceWithKnots`.
+- In the README, we clarified that the subtitle is the origin of the name “truck,” and changed all instances of the term in the main text to `truck`.
+- Get more precise part attributions from `Product` and `NextAssemblyUsageOccurrence`.
+- Add the variable `division` to `truck_modeling::builder::rsweep`.
+- Renew DAG structure.
+- Fix spell and replace `Fn` to `FnMut`.
+- Read assembly from step file.
+- Implement assembly structure handler `truck-assembly`.
+- Downgrade `cargo` for `cargo doc`. cf: https://github.com/rust-lang/rust/issues/148431
+- Update docker container and `Makefile.toml` for `gpu-test`.
+- Update docker container `gpu-test`
+- Fix step output of `CylindricalSurface`.
+- Remove `Arc` from the members of `DeviceHandler`.
+- Implement `border_wires` for `Face`.
+- Implement `From` and `ToSameGeometry` from `ExtrudeCurve<Line<Point3>, Vector3>` to `Plane`.
+- Fix comparative phrasing.
+- Fix `SceneInfo` in `polygon.wgsl`.
+- Upgrade wgpu v26.
+- Approximation of `RbfSurface` by `ApproxFilletSurface`.
+- Align mesh aspects of general surfaces tessellation.
+- Refactoring: `intersection_curve` and `Homogeneous`.
+- Implement `CurveDers` and `SurfaceDers`.
+- Loosened `cut_random_test` requirements.
+- Higher order derivations.
+- Renew `Camera`.
+- Constant allocation for faster B-spline basis function.
+- New implementation for `search_parameter`.
+- Add `RbfSurface`.
+- Add `prop_assert_near` for `proptest` integration.
+- Primitives: rect, circle, and cuboid.
+- The zoom of the parallel camera has been made to work.
+- Minor change.
+- Fix some typos.
+- Saving memory of `put_together_same_attrs`.
+- Closed mesh with `robust_triangluation`.
+- Implement `Transformed<Matrix4>` for `PolygonMesh`.
+- Fix some step output.
+- `cargo upgrade -i`
+- Create `CYLINDRICAL_SURFACE` by `builder::rsweep`.
+- Step output for specified revoluted surface.
+- Remove `println` for debugging.
+- Generalize `truck_modeling::builder` for apply step parsed geometries.
+- Review of the specifications for `IntersectionCurve`.
+- Fix STEP header description.
+- Fix some typos.
+- Implement `BSplineCurve::interpole`.
+- Implement `search_intersection_parameter` between surface and curve.
+- Add macros: `wire` and `shell`.
+- Strict derivation and `search_parameter` of `IntersectionCurve`.
+- Prototyping for fillet surface with NURBS geometry.
+- Implement abstract newton method.
+- Minor correction of `double_projection`.
+- Update algorithm of `double_projection`.
+- More improve of `truck_geotrait::algo::surface::search_parameter`.
+- Simplify `truck_geotrait::algo::surface::search_parameter`.
+- Add the macro `truck_topology::prelude!`.
 
 ### Latest `cargo upgrade`
 
-2023-12-08
+2026-03-13
+
+## v0.6
+
+### Additional APIs
+
+- `truck_stepio::in` has been released!
+  - Parse some geometries: B-spline, NURBS, elementary geometries, and so on.
+  - Parse topologies: shell and solid.
+  - JS wrappers.
+- Implement `robust_triangulation`, trimming meshes by `SearchNearestParameter`.
+- Output meshes by vtk formats.
+- Split closed edges and faces, loaded from STEP (generated by other CAD systems).
+- Calculate volume and center of the gravity of `PolygonMesh`.
+- Derive macros for implementing `StepLength` and `DisplayByStep`.
+- `area` and `include` function for a domain with several polyline boundaries.
+
+### Updated APIs
+
+- Add "periodic" identifier to `ParametricCurve` and `ParametricSurface`.
+- Remove the `Invertible` constraint from tessellating traits.
+- Features has been set up to use each module in `truck-meshalgo` separately.
+- Non-bounded parameter ranges has been supported. Updates `ParametricXXX` and `BoundedXXX`.
+- Derive macros in `truck-derivers` are supported for cases with generics.
+- Implement `SearchNearestParameter` for `Processor`.
+- Expanded coverage of tessellation API.
+  - Enabled meshing when the boundary is not closed in the parameter space.
+  - Add tessellate test with ABC Dataset.
+- Improve `put_together_each_attrs`.
+  - Add an argument to `put_together_each_attrs` to specify the tolerance.
+  - Transitive clustering instead of spatial partitioning by rounding
+- Improve `Shell::face_adjacency`: Common edges are now also retrieved.
+
+### Bug fix
+
+- Change the precision of floating point numbers when outputting STEP files.
+- Updates `SearchNearestParameter` for `RevolutedCurve`.
+- Fix a bug on partial `rsweep` with a negative angle.
+- Add a private function `spade_round` for fixing insert error.
+
+### Internal Improvements
+
+- Replace `Mutex` and `Arc` more faster and compact mem.
+- Refactor and renew test for `truck_modeling::geom_impl` by `proptest`.
+- Add tests for traits in `truck_modeling::topo_traits`.
+- Implementation for closed surface tessellation.
+- Implelment `AsRef`, `Borrow`, and `Extend` for `Wire` and `Shell`.
+
+### Misc
+
+- Changed some naming conventions to Rust standards.
+  - Make some struct naming canonical. ex: NURBSCurve -> NurbsCurve.
+  - Remove `get_` prefix from `Vertex::get_point`, `Edge::get_curve`, and `Face::get_surface`.
+- Put `truck_geometry::prelude` for resolve multiple re-export.
+- Tutorial for v0.6 series has been released.
 
 ## v0.5
 

@@ -5,7 +5,7 @@ macro_rules! intopt {
     ($type: ty, $slice: ident) => {
         assert!(
             $slice.len() == 3,
-            "{} is not a 3-dimentional!",
+            "{} is not a 3-dimensional!",
             stringify!($slice)
         );
         let $slice = <$type>::new($slice[0], $slice[1], $slice[2]);
@@ -31,8 +31,8 @@ pub fn circle_arc(vertex0: &Vertex, vertex1: &Vertex, transit: &[f64]) -> Edge {
 #[wasm_bindgen]
 pub fn bezier(vertex0: &Vertex, vertex1: &Vertex, inter_points: &[f64]) -> Edge {
     assert!(
-        inter_points.len() % 3 == 0,
-        "inter_points cannot convert to 3-dimentional points!"
+        inter_points.len().is_multiple_of(3),
+        "inter_points cannot convert to 3-dimensional points!"
     );
     let inter_points = inter_points
         .chunks(3)
@@ -139,7 +139,13 @@ pub fn tsweep(shape: &AbstractShape, vector: &[f64]) -> AbstractShape {
 
 /// Sweeps a vertex, an edge, a wire, a face, or a shell by the rotation.
 #[wasm_bindgen]
-pub fn rsweep(shape: &AbstractShape, origin: &[f64], axis: &[f64], angle: f64) -> AbstractShape {
+pub fn rsweep(
+    shape: &AbstractShape,
+    origin: &[f64],
+    axis: &[f64],
+    angle: f64,
+    division: usize,
+) -> AbstractShape {
     intopt!(Point3, origin, Vector3, axis);
-    derive_all_sweepable!(shape, builder::rsweep, (origin, axis, Rad(angle)))
+    derive_all_sweepable!(shape, builder::rsweep, (origin, axis, Rad(angle), division))
 }

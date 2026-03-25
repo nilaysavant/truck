@@ -75,13 +75,11 @@ pub trait NormalFilters {
     /// add the smooth normal vectors to the mesh.
     /// # Details
     /// For each vertex, apply the following algorithm:
-    /// 1. prepare vectors that enumerate the normals of the faces containing
-    /// the target vertices in order.
+    /// 1. prepare vectors that enumerate the normals of the faces containing the target vertices in order.
     /// 1. cluster each normal `n` in turn in the following manner.
     ///  * If there is an existing cluster `A` in which the angle between the weighted
-    /// average of `A` and `n` is less than or equal to `tol_ang`, add `n` to `A`.
-    ///  * If cluster `A` as described above does not exist,
-    /// create a new cluster that contains only `n`.
+    ///    average of `A` and `n` is less than or equal to `tol_ang`, add `n` to `A`.
+    ///  * If cluster `A` as described above does not exist, create a new cluster that contains only `n`.
     /// # Arguments
     /// - If `overwrite == true`, clear all normals and update all normals in vertices.
     /// - If `overwrite == false`, add normals only for `nor` is `None`.
@@ -282,14 +280,14 @@ impl NormalFilters for PolygonMesh {
         self
     }
     fn add_smooth_normals(&mut self, tol_ang: f64, overwrite: bool) -> &mut Self {
-        let vnmap = self.clustering_noraml_faces(tol_ang.cos());
+        let vnmap = self.clustering_normal_faces(tol_ang.cos());
         self.reflect_normal_clusters(vnmap, overwrite);
         self
     }
 }
 
 trait SubNormalFilter {
-    fn clustering_noraml_faces(&self, inf: f64) -> HashMap<usize, Vec<Vec<FaceNormal>>>;
+    fn clustering_normal_faces(&self, inf: f64) -> HashMap<usize, Vec<Vec<FaceNormal>>>;
     fn reflect_normal_clusters(
         &mut self,
         vnmap: HashMap<usize, Vec<Vec<FaceNormal>>>,
@@ -298,7 +296,7 @@ trait SubNormalFilter {
 }
 
 impl SubNormalFilter for PolygonMesh {
-    fn clustering_noraml_faces(&self, inf: f64) -> HashMap<usize, Vec<Vec<FaceNormal>>> {
+    fn clustering_normal_faces(&self, inf: f64) -> HashMap<usize, Vec<Vec<FaceNormal>>> {
         let positions = self.positions();
         let mut vnmap = HashMap::default();
         self.face_iter()

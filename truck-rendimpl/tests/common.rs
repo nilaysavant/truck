@@ -26,7 +26,7 @@ macro_rules! new_plane {
     };
 }
 
-impl<'a> Rendered for Plane<'a> {
+impl Rendered for Plane<'_> {
     impl_render_id!(id);
     fn vertex_buffer(
         &self,
@@ -74,7 +74,7 @@ impl<'a> Rendered for Plane<'a> {
                     layout: Some(layout),
                     vertex: VertexState {
                         module: &module,
-                        entry_point: self.vs_entpt,
+                        entry_point: Some(self.vs_entpt),
                         buffers: &[VertexBufferLayout {
                             array_stride: std::mem::size_of::<u32>() as BufferAddress,
                             step_mode: VertexStepMode::Vertex,
@@ -84,15 +84,17 @@ impl<'a> Rendered for Plane<'a> {
                                 shader_location: 0,
                             }],
                         }],
+                        compilation_options: Default::default(),
                     },
                     fragment: Some(FragmentState {
                         module: &module,
-                        entry_point: self.fs_entpt,
+                        entry_point: Some(self.fs_entpt),
                         targets: &[Some(ColorTargetState {
                             format: scene_desc.render_texture.format,
                             blend: Some(BlendState::REPLACE),
                             write_mask: ColorWrites::ALL,
                         })],
+                        compilation_options: Default::default(),
                     }),
                     primitive: PrimitiveState {
                         topology: PrimitiveTopology::TriangleList,
@@ -115,6 +117,7 @@ impl<'a> Rendered for Plane<'a> {
                     },
                     label: None,
                     multiview: None,
+                    cache: None,
                 }),
         )
     }
@@ -164,17 +167,17 @@ pub fn init_device(instance: &Instance) -> DeviceHandler {
             .unwrap();
         writeln!(&mut std::io::stderr(), "{:?}", adapter.get_info()).unwrap();
         let (device, queue) = adapter
-            .request_device(
-                &DeviceDescriptor {
-                    features: Default::default(),
-                    limits: Limits::default(),
-                    label: None,
-                },
-                None,
-            )
+            .request_device(&DeviceDescriptor {
+                required_features: Default::default(),
+                required_limits: Limits::default(),
+                memory_hints: Default::default(),
+                trace: Default::default(),
+                experimental_features: ExperimentalFeatures::disabled(),
+                label: None,
+            })
             .await
             .unwrap();
-        DeviceHandler::new(Arc::new(adapter), Arc::new(device), Arc::new(queue))
+        DeviceHandler::new(adapter, device, queue)
     })
 }
 
@@ -187,6 +190,7 @@ pub fn swap_chain_descriptor(size: (u32, u32)) -> SurfaceConfiguration {
         present_mode: PresentMode::Mailbox,
         view_formats: Vec::new(),
         alpha_mode: CompositeAlphaMode::Auto,
+        desired_maximum_frame_latency: 2,
     }
 }
 

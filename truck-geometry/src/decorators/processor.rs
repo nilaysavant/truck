@@ -1,12 +1,23 @@
 use super::*;
+use algo::surface::SsnpVector;
 
 impl<E, T: One> Processor<E, T> {
     /// Creates new processor
     #[inline(always)]
-    pub fn new(entity: E) -> Processor<E, T> {
-        Processor {
+    pub fn new(entity: E) -> Self {
+        Self {
             entity,
             transform: T::one(),
+            orientation: true,
+        }
+    }
+
+    /// Creates new transformed processor
+    #[inline(always)]
+    pub const fn with_transform(entity: E, transform: T) -> Self {
+        Self {
+            entity,
+            transform,
             orientation: true,
         }
     }
@@ -53,7 +64,7 @@ impl<E, T: One> Processor<E, T> {
     }
 
     /// apply the transform and inverse
-    pub fn constract(self) -> E
+    pub fn contract(self) -> E
     where E: Transformed<T> + Invertible {
         let mut res = self.entity;
         res.transform_by(self.transform);
@@ -98,6 +109,15 @@ where
     type Point = C::Point;
     type Vector = C::Vector;
     #[inline(always)]
+    fn der_n(&self, n: usize, t: f64) -> Self::Vector {
+        if n == 0 {
+            self.subs(t).to_vec()
+        } else {
+            let t = self.get_curve_parameter(t);
+            self.transform.transform_vector(self.entity.der_n(n, t))
+        }
+    }
+    #[inline(always)]
     fn subs(&self, t: f64) -> C::Point {
         let t = self.get_curve_parameter(t);
         self.transform.transform_point(self.entity.subs(t))
@@ -127,6 +147,27 @@ where
 {
 }
 
+impl<C, T> Cut for Processor<C, T>
+where
+    C: BoundedCurve + Cut,
+    C::Point: EuclideanSpace<Diff = C::Vector>,
+    C::Vector: VectorSpace<Scalar = f64>,
+    T: Transform<C::Point> + Clone,
+{
+    fn cut(&mut self, t: f64) -> Self {
+        let t = self.get_curve_parameter(t);
+        let mut entity = self.entity.cut(t);
+        if !self.orientation {
+            std::mem::swap(&mut entity, &mut self.entity);
+        }
+        Self {
+            entity,
+            transform: self.transform.clone(),
+            orientation: self.orientation,
+        }
+    }
+}
+
 impl<S, T> ParametricSurface for Processor<S, T>
 where
     S: ParametricSurface,
@@ -135,6 +176,21 @@ where
 {
     type Point = S::Point;
     type Vector = S::Vector;
+    #[inline(always)]
+    fn der_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
+        if (m, n) == (0, 0) {
+            self.subs(u, v).to_vec()
+        } else {
+            match self.orientation {
+                true => self
+                    .transform
+                    .transform_vector(self.entity.der_mn(m, n, u, v)),
+                false => self
+                    .transform
+                    .transform_vector(self.entity.der_mn(n, m, v, u)),
+            }
+        }
+    }
     #[inline(always)]
     fn subs(&self, u: f64, v: f64) -> Self::Point {
         match self.orientation {
@@ -461,8 +517,8 @@ where
 impl<P, E, T> SearchNearestParameter<D2> for Processor<E, T>
 where
     E: ParametricSurface<Point = P> + SearchNearestParameter<D2, Point = P>,
-    P: EuclideanSpace<Scalar = f64, Diff = E::Vector>,
-    E::Vector: InnerSpace<Scalar = f64> + Tolerance,
+    P: EuclideanSpace<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
+    E::Vector: SsnpVector<Point = P>,
     T: Transform<P> + SquareMatrix<Scalar = f64> + Clone,
 {
     type Point = P;
@@ -484,154 +540,23 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn exec_compatible_with_bspcurve() {
-        const DEGREE: usize = 3;
-        const DIVISION: usize = 4;
-        let knot_vec = KnotVec::uniform_knot(DEGREE, DIVISION);
-        let control_points: Vec<Point3> = (0..DEGREE + DIVISION)
-            .map(|i| Point3::new(i as f64, 20.0 * rand::random::<f64>() - 10.0, 0.0))
-            .collect();
-        let mut curve = BSplineCurve::new(knot_vec, control_points);
-        let mut processor = Processor::new(curve.clone());
-        let mat = Matrix3::new(
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-        );
-        if mat.determinant().so_small() {
-            println!("omitted: {mat:?}");
-            return;
+impl<E, T, U> ToSameGeometry<U> for Processor<E, T>
+where
+    E: ToSameGeometry<U>,
+    T: Copy,
+    U: Transformed<T> + Invertible,
+{
+    fn to_same_geometry(&self) -> U {
+        let Self {
+            entity,
+            transform,
+            orientation,
+        } = self;
+        let mut u = entity.to_same_geometry();
+        u.transform_by(*transform);
+        if !orientation {
+            u.invert();
         }
-        curve.transform_by(mat);
-        processor.transform_by(mat);
-        assert_eq!(curve.parameter_range(), processor.parameter_range());
-
-        const N: usize = 100;
-        for i in 0..=N {
-            let t = i as f64 / N as f64;
-            assert_near!(ParametricCurve::subs(&curve, t), processor.subs(t));
-            assert_near!(ParametricCurve::der(&curve, t), processor.der(t));
-            assert_near!(ParametricCurve::der2(&curve, t), processor.der2(t));
-        }
-
-        curve.invert();
-        processor.invert();
-        assert_eq!(curve.parameter_range(), processor.parameter_range());
-        for i in 0..=N {
-            let t = i as f64 / N as f64;
-            assert_near!(ParametricCurve::subs(&curve, t), processor.subs(t));
-            assert_near!(ParametricCurve::der(&curve, t), processor.der(t));
-            assert_near!(ParametricCurve::der2(&curve, t), processor.der2(t));
-        }
+        u
     }
-
-    #[test]
-    fn compatible_with_bspcurve() { (0..10).for_each(|_| exec_compatible_with_bspcurve()) }
-
-    fn exec_compatible_with_bspsurface() {
-        const DEGREE: usize = 3;
-        const DIVISION: usize = 4;
-        let knot_vec = KnotVec::uniform_knot(DEGREE, DIVISION);
-        let knot_vecs = (knot_vec.clone(), knot_vec);
-        let control_points: Vec<Vec<Point3>> = (0..DEGREE + DIVISION)
-            .map(|i| {
-                (0..DEGREE + DIVISION)
-                    .map(|j| Point3::new(i as f64, j as f64, 20.0 * rand::random::<f64>() - 10.0))
-                    .collect()
-            })
-            .collect();
-        let mut surface = BSplineSurface::new(knot_vecs, control_points);
-        let mut processor = Processor::new(surface.clone());
-        let mat = Matrix3::new(
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-            4.0 * rand::random::<f64>() - 2.0,
-        );
-        if mat.determinant().so_small() {
-            println!("omitted: {mat:?}");
-            return;
-        }
-        surface.transform_by(mat);
-        processor.transform_by(mat);
-        assert_eq!(surface.range_tuple(), processor.range_tuple());
-
-        const N: usize = 30;
-        for i in 0..=N {
-            for j in 0..=N {
-                let u = i as f64 / N as f64;
-                let v = j as f64 / N as f64;
-                let pt0 = ParametricSurface::subs(&surface, u, v);
-                let pt1 = processor.subs(u, v);
-                assert_near!(pt0, pt1);
-                let uder0 = surface.uder(u, v);
-                let uder1 = processor.uder(u, v);
-                assert_near!(uder0, uder1);
-                let vder0 = surface.vder(u, v);
-                let vder1 = processor.vder(u, v);
-                assert_near!(vder0, vder1);
-                let uuder0 = surface.uuder(u, v);
-                let uuder1 = processor.uuder(u, v);
-                assert_near!(uuder0, uuder1);
-                let uvder0 = surface.uvder(u, v);
-                let uvder1 = processor.uvder(u, v);
-                assert_near!(uvder0, uvder1);
-                let vvder0 = surface.vvder(u, v);
-                let vvder1 = processor.vvder(u, v);
-                assert_near!(vvder0, vvder1);
-                let n0 = surface.normal(u, v);
-                let n1 = processor.normal(u, v);
-                assert_near!(n0, n1);
-            }
-        }
-
-        surface.swap_axes();
-        processor.invert();
-        assert_eq!(surface.range_tuple(), processor.range_tuple());
-        for i in 0..=N {
-            for j in 0..=N {
-                let u = i as f64 / N as f64;
-                let v = j as f64 / N as f64;
-                let pt0 = ParametricSurface::subs(&surface, u, v);
-                let pt1 = processor.subs(u, v);
-                assert_near!(pt0, pt1);
-                let uder0 = surface.uder(u, v);
-                let uder1 = processor.uder(u, v);
-                assert_near!(uder0, uder1);
-                let vder0 = surface.vder(u, v);
-                let vder1 = processor.vder(u, v);
-                assert_near!(vder0, vder1);
-                let uuder0 = surface.uuder(u, v);
-                let uuder1 = processor.uuder(u, v);
-                assert_near!(uuder0, uuder1);
-                let uvder0 = surface.uvder(u, v);
-                let uvder1 = processor.uvder(u, v);
-                assert_near!(uvder0, uvder1);
-                let vvder0 = surface.vvder(u, v);
-                let vvder1 = processor.vvder(u, v);
-                assert_near!(vvder0, vvder1);
-                let n0 = surface.normal(u, v);
-                let n1 = processor.normal(u, v);
-                assert_near!(n0, n1);
-            }
-        }
-    }
-
-    #[test]
-    fn compatible_with_bspsurface() { (0..3).for_each(|_| exec_compatible_with_bspsurface()) }
 }

@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 /// re-export `truck_base`.
 pub mod base {
     pub use truck_base::{
-        bounding_box::BoundingBox, cgmath64::*, hash, hash::HashGen, tolerance::*,
+        assert_near, assert_near2, bounding_box::BoundingBox, cgmath64::*, hash, hash::HashGen,
+        prop_assert_near, prop_assert_near2, tolerance::*,
     };
     pub use truck_geotrait::*;
 }
@@ -31,6 +32,14 @@ pub trait Attributes<V> {
     type Output;
     /// get attribution corresponding to vertex
     fn get(&self, vertex: V) -> Option<Self::Output>;
+}
+
+/// transform attributions
+pub trait TransformedAttributes: Clone {
+    /// transform by `trans`.
+    fn transform_by(&mut self, trans: Matrix4);
+    /// transformed attributions by `trans`.
+    fn transformed(&self, trans: Matrix4) -> Self;
 }
 
 /// standard attributions
